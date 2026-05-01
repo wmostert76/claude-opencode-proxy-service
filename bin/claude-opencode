@@ -966,6 +966,7 @@ print_startup_table() {
   printf '  %-10s %s\n' "Proxy" "${c}${PROXY_URL}${r}"
   printf '  %-10s %s\n' "Provider" "OpenCode Go"
   printf '  %-10s %s\n' "Model" "opencode-go/${DEFAULT_MODEL}"
+  printf '  %-10s %s\n' "Forced" "yes (--model ${DEFAULT_MODEL})"
   printf '  %-10s %s\n' "Tools" "proxy web_fetch"
   printf '  %-10s %s\n' "Config" "$CONFIG_FILE"
   printf '  %-10s %s\n' "Log" "$LOG_FILE"
