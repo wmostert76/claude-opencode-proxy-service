@@ -164,9 +164,6 @@ function anthropicToOpenAI(body) {
     model: normalizeModel(body.model) || DEFAULT_MODEL,
     max_tokens: Math.max(body.max_tokens ?? 4096, 500),
     messages: [],
-    // Disable thinking mode — reasoning_content causes issues with
-    // multi-turn tool conversations since Claude Code doesn't track it
-    thinking: { type: "disabled" },
   };
 
   // System prompt
