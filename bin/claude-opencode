@@ -11,6 +11,7 @@ readonly CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 readonly CONFIG_FILE="${CLAUDE_OPENCODE_CONFIG:-$HOME/.config/claude-opencode-proxy/config.json}"
 readonly VERSION_FILE="${VERSION_FILE:-$SCRIPT_DIR/../VERSION}"
 readonly LOG_FILE="${CLAUDE_OPENCODE_LOG:-$HOME/.cache/claude-opencode-proxy/proxy.log}"
+readonly TRACE_LOG="${CLAUDE_OPENCODE_TRACE_LOG:-$HOME/.cache/claude-opencode-proxy/traces.jsonl}"
 CONFIG_PROXY_HOST="$(CONFIG_PATH="$CONFIG_FILE" python3 <<'PY' 2>/dev/null || true
 import json
 import os
@@ -662,6 +663,89 @@ show_logs() {
   fi
 }
 
+show_traces() {
+  local limit="${1:-20}"
+
+  [[ -r "$TRACE_LOG" ]] || die "Trace log not found: $TRACE_LOG"
+  TRACE_LOG_PATH="$TRACE_LOG" LIMIT="$limit" python3 <<'PY'
+import json
+import os
+from collections import deque
+
+path = os.environ["TRACE_LOG_PATH"]
+limit = int(os.environ["LIMIT"])
+
+rows = []
+with open(path, "r", encoding="utf-8") as f:
+    for line in deque(f, maxlen=limit):
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            pass
+
+headers = ("Trace", "Status", "Model", "Final", "ms", "Retries", "Fetches", "Tokens")
+def tokens(trace):
+    usage = trace.get("usage") or {}
+    return str(usage.get("totalTokens") or usage.get("inputTokens") or "?")
+
+table = []
+for trace in rows:
+    table.append((
+        trace.get("id", "")[:8],
+        trace.get("status", "?"),
+        trace.get("model", "?"),
+        trace.get("finalModel", "?"),
+        str(trace.get("latencyMs", "?")),
+        str(trace.get("retries", 0)),
+        str(len(trace.get("webFetches", []))),
+        tokens(trace),
+    ))
+
+widths = [len(h) for h in headers]
+for row in table:
+    widths = [max(widths[i], len(row[i])) for i in range(len(headers))]
+
+def line(row):
+    return "  ".join(row[i].ljust(widths[i]) for i in range(len(row)))
+
+print(line(headers))
+print(line(tuple("-" * w for w in widths)))
+for row in table:
+    print(line(row))
+PY
+}
+
+show_trace() {
+  local wanted="${1:-}"
+
+  [[ -n "$wanted" ]] || die "Usage: claude trace <trace-id>"
+  [[ -r "$TRACE_LOG" ]] || die "Trace log not found: $TRACE_LOG"
+
+  TRACE_LOG_PATH="$TRACE_LOG" TRACE_ID="$wanted" python3 <<'PY'
+import json
+import os
+import sys
+
+path = os.environ["TRACE_LOG_PATH"]
+wanted = os.environ["TRACE_ID"]
+match = None
+with open(path, "r", encoding="utf-8") as f:
+    for line in f:
+        try:
+            trace = json.loads(line)
+        except Exception:
+            continue
+        if trace.get("id", "").startswith(wanted):
+            match = trace
+
+if not match:
+    print(f"Trace not found: {wanted}", file=sys.stderr)
+    sys.exit(1)
+
+print(json.dumps(match, indent=2))
+PY
+}
+
 run_doctor() {
   local failed=0
 
@@ -760,6 +844,7 @@ test_one_model() {
     curl -fsS -m "${CLAUDE_OPENCODE_TEST_TIMEOUT:-45}" \
       -H 'Content-Type: application/json' \
       -H 'x-api-key: claude-opencode-local-proxy' \
+      -H 'x-claude-opencode-no-failover: 1' \
       -d "{\"model\":\"$model\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"Reply exactly: pong\"}]}" \
       "$PROXY_URL/v1/messages" 2>&1
   )"
@@ -818,6 +903,14 @@ maybe_handle_model_command() {
         show_logs "${2:-}"
         return 0
         ;;
+      traces)
+        show_traces "${2:-20}"
+        return 0
+        ;;
+      trace)
+        show_trace "${2:-}"
+        return 0
+        ;;
       update)
         run_update
         return 0
@@ -867,7 +960,7 @@ end
 
 complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
 complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
-complete -c claude -f -a 'setup doctor status logs update models' -d 'Claude OpenCode command'
+complete -c claude -f -a 'setup doctor status logs traces trace update models' -d 'Claude OpenCode command'
 FISH
         ;;
       bash)
@@ -884,7 +977,7 @@ _claude_opencode_completion() {
   fi
 
   if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "--api --model --help --version setup doctor status logs update models" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--api --model --help --version setup doctor status logs traces trace update models" -- "$cur") )
   fi
 }
 

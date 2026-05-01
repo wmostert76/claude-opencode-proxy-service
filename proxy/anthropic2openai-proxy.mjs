@@ -10,6 +10,9 @@
  */
 
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const PORT = parseInt(process.env.PROXY_PORT || "8082", 10);
 const TARGET = "https://opencode.ai/zen/go/v1/chat/completions";
@@ -19,6 +22,14 @@ const WEB_FETCH_ENABLED = process.env.CLAUDE_OPENCODE_WEB_FETCH !== "0";
 const WEB_FETCH_TIMEOUT_MS = parseInt(process.env.CLAUDE_OPENCODE_WEB_FETCH_TIMEOUT_MS || "10000", 10);
 const WEB_FETCH_MAX_BYTES = parseInt(process.env.CLAUDE_OPENCODE_WEB_FETCH_MAX_BYTES || "120000", 10);
 const WEB_FETCH_MAX_ROUNDS = parseInt(process.env.CLAUDE_OPENCODE_WEB_FETCH_MAX_ROUNDS || "3", 10);
+const TRACE_LOG = process.env.CLAUDE_OPENCODE_TRACE_LOG || `${process.env.HOME || "."}/.cache/claude-opencode-proxy/traces.jsonl`;
+const RETRY_ATTEMPTS = parseInt(process.env.CLAUDE_OPENCODE_RETRY_ATTEMPTS || "2", 10);
+const RETRY_BASE_MS = parseInt(process.env.CLAUDE_OPENCODE_RETRY_BASE_MS || "350", 10);
+const FALLBACK_MODELS = (process.env.CLAUDE_OPENCODE_FALLBACK_MODELS || "glm-5.1,kimi-k2.6,minimax-m2.7,qwen3.6-plus")
+  .split(",")
+  .map(model => normalizeModel(model.trim()))
+  .filter(Boolean);
+const RETRY_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
 if (!API_KEY) {
   console.error("ANTHROPIC_API_KEY env var is required");
@@ -54,6 +65,67 @@ const PROXY_SYSTEM_NOTE = [
   "If you need to inspect a public web page or URL, use the available web_fetch tool.",
   "Use web_fetch only for http/https pages that are relevant to the user's request.",
 ].join(" ");
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function redact(value) {
+  if (typeof value !== "string") return value;
+  return value
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-REDACTED")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email-redacted]");
+}
+
+function writeTrace(trace) {
+  try {
+    fs.mkdirSync(path.dirname(TRACE_LOG), { recursive: true });
+    fs.appendFileSync(TRACE_LOG, `${JSON.stringify(trace)}\n`, "utf8");
+  } catch (err) {
+    console.error(`[proxy] trace write failed: ${err.message}`);
+  }
+}
+
+function createTrace(req, openaiReq) {
+  return {
+    id: req.headers["x-claude-opencode-trace-id"] || randomUUID(),
+    ts: nowIso(),
+    model: openaiReq.model,
+    finalModel: openaiReq.model,
+    status: "started",
+    upstreamStatus: null,
+    latencyMs: null,
+    stream: Boolean(openaiReq.stream),
+    retries: 0,
+    failovers: [],
+    webFetches: [],
+    usage: null,
+    error: null,
+  };
+}
+
+function recordUsage(trace, data) {
+  if (!data?.usage) return;
+  trace.usage = {
+    inputTokens: data.usage.prompt_tokens || data.usage.input_tokens || 0,
+    outputTokens: data.usage.completion_tokens || data.usage.output_tokens || 0,
+    totalTokens: data.usage.total_tokens || 0,
+    cost: data.cost || null,
+  };
+}
+
+function candidateModels(primary, failoverEnabled) {
+  if (!failoverEnabled) return [primary];
+  return [primary, ...FALLBACK_MODELS.filter(model => model !== primary)];
+}
+
+function shouldRetryStatus(status) {
+  return RETRY_STATUSES.has(status);
+}
 
 // ── Request translation: Anthropic → OpenAI ──────────────────────────
 
@@ -376,7 +448,50 @@ function readBody(req) {
   });
 }
 
-async function forwardRequest(openaiReq) {
+async function forwardRequest(openaiReq, trace, options = {}) {
+  const failoverEnabled = options.failoverEnabled !== false;
+  let lastResp = null;
+  let lastErr = null;
+
+  for (const model of candidateModels(openaiReq.model, failoverEnabled)) {
+    const reqForModel = { ...openaiReq, model };
+    if (model.startsWith("deepseek-")) {
+      reqForModel.thinking = { type: "disabled" };
+    } else {
+      delete reqForModel.thinking;
+    }
+
+    if (model !== openaiReq.model) {
+      trace.failovers.push({ from: trace.finalModel, to: model, at: nowIso() });
+    }
+    trace.finalModel = model;
+
+    for (let attempt = 0; attempt <= RETRY_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        trace.retries += 1;
+        await sleep(RETRY_BASE_MS * attempt);
+      }
+
+      try {
+        const resp = await rawForwardRequest(reqForModel);
+        trace.upstreamStatus = resp.status;
+        lastResp = resp;
+
+        if (resp.ok || !shouldRetryStatus(resp.status)) {
+          return resp;
+        }
+      } catch (err) {
+        lastErr = err;
+        trace.error = redact(err.message);
+      }
+    }
+  }
+
+  if (lastResp) return lastResp;
+  throw lastErr || new Error("upstream request failed");
+}
+
+async function rawForwardRequest(openaiReq) {
   const body = JSON.stringify(openaiReq);
   const resp = await fetch(TARGET, {
     method: "POST",
@@ -427,7 +542,7 @@ async function readLimitedText(resp) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function executeWebFetch(args) {
+async function executeWebFetch(args, trace) {
   let url;
   try {
     url = new URL(args?.url || "");
@@ -441,6 +556,7 @@ async function executeWebFetch(args) {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
+  const started = Date.now();
   try {
     const resp = await fetch(url, {
       redirect: "follow",
@@ -452,6 +568,13 @@ async function executeWebFetch(args) {
     });
     const contentType = resp.headers.get("content-type") || "";
     const raw = await readLimitedText(resp);
+    trace?.webFetches?.push({
+      url: url.toString(),
+      finalUrl: resp.url,
+      status: resp.status,
+      latencyMs: Date.now() - started,
+      bytes: raw.length,
+    });
     return JSON.stringify({
       ok: resp.ok,
       url: resp.url,
@@ -461,20 +584,27 @@ async function executeWebFetch(args) {
       text: compactFetchedText(raw, contentType),
     });
   } catch (err) {
+    trace?.webFetches?.push({
+      url: url.toString(),
+      status: "error",
+      latencyMs: Date.now() - started,
+      error: redact(err.message),
+    });
     return JSON.stringify({ ok: false, url: url.toString(), error: err.message });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function resolveInternalToolCalls(openaiReq) {
+async function resolveInternalToolCalls(openaiReq, trace, options = {}) {
   const req = { ...openaiReq, stream: false, messages: [...openaiReq.messages] };
 
   for (let round = 0; round < WEB_FETCH_MAX_ROUNDS; round++) {
-    const upstreamResp = await forwardRequest(req);
+    const upstreamResp = await forwardRequest(req, trace, options);
     if (!upstreamResp.ok) return { upstreamResp };
 
     const data = await upstreamResp.json();
+    recordUsage(trace, data);
     const message = data.choices?.[0]?.message;
     const toolCalls = message?.tool_calls || [];
     const internalCalls = toolCalls.filter(isInternalToolCall);
@@ -500,7 +630,7 @@ async function resolveInternalToolCalls(openaiReq) {
       req.messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: await executeWebFetch(args),
+        content: await executeWebFetch(args, trace),
       });
     }
   }
@@ -634,16 +764,25 @@ const server = http.createServer(async (req, res) => {
   }
 
   const openaiReq = anthropicToOpenAI(anthropicReq);
+  const trace = createTrace(req, openaiReq);
+  const started = Date.now();
+  const failoverEnabled = req.headers["x-claude-opencode-no-failover"] !== "1";
+  res.setHeader("x-claude-opencode-trace-id", trace.id);
 
   try {
     const resolved = WEB_FETCH_ENABLED
-      ? await resolveInternalToolCalls(openaiReq)
-      : { upstreamResp: await forwardRequest(openaiReq) };
+      ? await resolveInternalToolCalls(openaiReq, trace, { failoverEnabled })
+      : { upstreamResp: await forwardRequest(openaiReq, trace, { failoverEnabled }) };
     const upstreamResp = resolved.upstreamResp;
 
     if (upstreamResp && !upstreamResp.ok) {
       const errText = await upstreamResp.text();
-      console.error(`[proxy] upstream error ${upstreamResp.status}: ${errText.slice(0, 500)}`);
+      trace.status = "error";
+      trace.upstreamStatus = upstreamResp.status;
+      trace.latencyMs = Date.now() - started;
+      trace.error = redact(errText.slice(0, 500));
+      writeTrace(trace);
+      console.error(`[proxy] ${trace.id} upstream error ${upstreamResp.status}: ${errText.slice(0, 500)}`);
       res.writeHead(upstreamResp.status, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         type: "error",
@@ -656,7 +795,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (resolved.data) {
+      recordUsage(trace, resolved.data);
       const anthropicResp = openAIToAnthropic(resolved.data);
+      trace.status = "ok";
+      trace.latencyMs = Date.now() - started;
+      writeTrace(trace);
       if (anthropicReq.stream) {
         writeAnthropicSSE(res, anthropicResp);
       } else {
@@ -697,6 +840,7 @@ const server = http.createServer(async (req, res) => {
       const body = await upstreamResp.text();
       const lines = body.split("\n");
       let finishReason = null;
+      let lastUsage = null;
 
       for (const line of lines) {
         if (line.startsWith("data: ")) {
@@ -707,6 +851,9 @@ const server = http.createServer(async (req, res) => {
             const chunk = JSON.parse(jsonStr);
             if (chunk.choices?.[0]?.finish_reason) {
               finishReason = chunk.choices[0].finish_reason;
+            }
+            if (chunk.usage) {
+              lastUsage = chunk.usage;
             }
             const event = openAIDeltaToAnthropicEvent(chunk, messageId, model, state);
             if (event) res.write(event);
@@ -737,16 +884,28 @@ const server = http.createServer(async (req, res) => {
       // message_stop
       res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
 
+      if (lastUsage) recordUsage(trace, { usage: lastUsage });
+      trace.status = "ok";
+      trace.latencyMs = Date.now() - started;
+      writeTrace(trace);
       res.end();
     } else {
       // Non-streaming response
       const openaiResp = await upstreamResp.json();
+      recordUsage(trace, openaiResp);
       const anthropicResp = openAIToAnthropic(openaiResp);
+      trace.status = "ok";
+      trace.latencyMs = Date.now() - started;
+      writeTrace(trace);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(anthropicResp));
     }
   } catch (err) {
-    console.error(`[proxy] error: ${err.message}`);
+    trace.status = "error";
+    trace.latencyMs = Date.now() - started;
+    trace.error = redact(err.message);
+    writeTrace(trace);
+    console.error(`[proxy] ${trace.id} error: ${err.message}`);
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       type: "error",

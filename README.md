@@ -70,7 +70,7 @@ Every normal `claude` launch starts the proxy and shows a compact status panel:
 ```text
 Claude OpenCode Proxy Service
 ─────────────────────────────
-  Release    v0.3.0
+  Release    v0.4.0
   State      ready
   Proxy      http://127.0.0.1:8082
   Provider   OpenCode Go
@@ -104,6 +104,8 @@ claude doctor
 claude status
 claude logs
 claude logs --follow
+claude traces
+claude trace <trace-id>
 claude update
 claude models --test
 ```
@@ -262,6 +264,8 @@ VERSION                          base release version
 | `claude status` | Shows release, model, proxy, config, log and running PIDs |
 | `claude logs` | Shows the latest proxy logs |
 | `claude logs --follow` | Follows proxy logs live |
+| `claude traces` | Shows recent request traces |
+| `claude trace <trace-id>` | Shows one trace as JSON |
 | `claude update` | Re-runs the GitHub one-line installer in-place |
 | `claude models --test` | Tests every OpenCode Go model with a small pong request |
 | `claude --model` | Shows the ranked OpenCode Go model table |
@@ -289,6 +293,48 @@ CLAUDE_OPENCODE_WEB_FETCH=0                 # disable
 CLAUDE_OPENCODE_WEB_FETCH_TIMEOUT_MS=10000  # timeout
 CLAUDE_OPENCODE_WEB_FETCH_MAX_BYTES=120000  # max page text
 CLAUDE_OPENCODE_WEB_FETCH_MAX_ROUNDS=3      # max internal tool rounds
+```
+
+---
+
+## Observability
+
+Every proxy call writes a JSONL trace with:
+
+- trace id
+- requested and final model
+- latency
+- retry count
+- failover path
+- web_fetch calls
+- upstream status
+- token usage when the provider returns it
+- redacted error text
+
+Trace log:
+
+```text
+~/.cache/claude-opencode-proxy/traces.jsonl
+```
+
+Inspect traces:
+
+```bash
+claude traces
+claude traces 50
+claude trace <trace-id>
+```
+
+The proxy retries transient upstream failures and can fail over from the primary model to:
+
+```text
+glm-5.1, kimi-k2.6, minimax-m2.7, qwen3.6-plus
+```
+
+Override fallback order:
+
+```bash
+CLAUDE_OPENCODE_FALLBACK_MODELS=glm-5.1,kimi-k2.6
 ```
 
 ---
