@@ -662,7 +662,7 @@ test_one_model() {
   fi
 
   printf 'FAIL  %-28s %6sms  %s\n' "opencode-go/$model" "$latency" "$(printf '%s' "$result" | tr '\n' ' ' | cut -c1-120)"
-  return 1
+  return 64
 }
 
 test_models() {
@@ -714,7 +714,7 @@ maybe_handle_model_command() {
       models)
         if [[ "${2:-}" == "--test" ]]; then
           test_models
-          return 0
+          return $?
         fi
         list_go_models
         return 0
@@ -864,8 +864,14 @@ cleanup() {
 }
 
 main() {
-  if maybe_handle_model_command "$@"; then
-    return 0
+  local command_status
+
+  set +e
+  maybe_handle_model_command "$@"
+  command_status=$?
+  set -e
+  if [[ "$command_status" -ne 64 ]]; then
+    return "$command_status"
   fi
 
   need_cmd node
