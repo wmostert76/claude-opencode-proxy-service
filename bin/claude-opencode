@@ -6,7 +6,7 @@ set -Eeuo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROXY_SCRIPT="${PROXY_SCRIPT:-$SCRIPT_DIR/../proxy/anthropic2openai-proxy.mjs}"
-readonly REAL_CLAUDE="${REAL_CLAUDE:-$HOME/.local/share/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}"
+readonly REAL_CLAUDE="${REAL_CLAUDE:-$SCRIPT_DIR/../node_modules/@anthropic-ai/claude-code/bin/claude.exe}"
 readonly CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 readonly CONFIG_FILE="${CLAUDE_GO_CONFIG:-$HOME/.config/claude-go/config.json}"
 readonly VERSION_FILE="${VERSION_FILE:-$SCRIPT_DIR/../VERSION}"
@@ -175,7 +175,7 @@ PY
 set_api_key() {
   local key="${1:-}"
 
-  [[ -n "$key" ]] || die "Usage: claude --api <opencode-go-api-key>"
+  [[ -n "$key" ]] || die "Usage: claude-go --api <opencode-go-api-key>"
 
   CONFIG_PATH="$CONFIG_FILE" API_KEY="$key" DEFAULT_MODEL_VALUE="${DEFAULT_MODEL:-deepseek-v4-pro}" PROXY_HOST_VALUE="$PROXY_HOST" PROXY_PORT_VALUE="$PROXY_PORT" python3 <<'PY'
 import json
@@ -212,7 +212,7 @@ PY
 set_custom_system_prompt() {
   local prompt="${1:-}"
 
-  [[ -n "$prompt" ]] || die "Usage: claude --prompt <text>"
+  [[ -n "$prompt" ]] || die "Usage: claude-go --prompt <text>"
 
   CONFIG_PATH="$CONFIG_FILE" PROMPT_VALUE="$prompt" python3 <<'PY'
 import json
@@ -459,7 +459,7 @@ def line(parts):
     return "  ".join(parts[i].ljust(widths[i]) for i in range(len(parts)))
 
 print(f"{bold}OpenCode Go models ranked best to fallback{reset}")
-print(f"{dim}Use: claude --model <model>   Example: claude --model deepseek-v4-pro{reset}\n")
+print(f"{dim}Use: claude-go --model <model>   Example: claude-go --model deepseek-v4-pro{reset}\n")
 print(bold + line(headers) + reset)
 print(dim + line(tuple("-" * w for w in widths)) + reset)
 for row in rows:
@@ -598,8 +598,8 @@ PY
 }
 
 load_runtime_config() {
-  API_KEY="$(read_api_key)" || die "Could not read API key from $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
-  [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
+  API_KEY="$(read_api_key)" || die "Could not read API key from $CONFIG_FILE. Run: claude-go --api <opencode-go-api-key>"
+  [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude-go --api <opencode-go-api-key>"
   DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
   CUSTOM_SYSTEM_PROMPT="$(read_custom_system_prompt)"
   SESSION_SYSTEM_PROMPT="$(build_session_system_prompt)"
@@ -726,7 +726,7 @@ PY
 show_trace() {
   local wanted="${1:-}"
 
-  [[ -n "$wanted" ]] || die "Usage: claude trace <trace-id>"
+  [[ -n "$wanted" ]] || die "Usage: claude-go trace <trace-id>"
   [[ -r "$TRACE_LOG" ]] || die "Trace log not found: $TRACE_LOG"
 
   TRACE_LOG_PATH="$TRACE_LOG" TRACE_ID="$wanted" python3 <<'PY'
@@ -778,14 +778,14 @@ run_doctor() {
   if [[ -r "$CONFIG_FILE" ]]; then
     ok "Proxy config readable: $CONFIG_FILE"
   else
-    fail "Proxy config missing. Run: claude --api <opencode-go-api-key>"
+    fail "Proxy config missing. Run: claude-go --api <opencode-go-api-key>"
     failed=1
   fi
 
   if API_KEY="$(read_api_key)" && [[ -n "$API_KEY" ]]; then
     ok "OpenCode Go API key configured"
   else
-    fail "OpenCode Go API key missing. Run: claude --api <opencode-go-api-key>"
+    fail "OpenCode Go API key missing. Run: claude-go --api <opencode-go-api-key>"
     failed=1
   fi
 
@@ -799,7 +799,7 @@ run_doctor() {
   if curl -fsS "$PROXY_URL/health" >/dev/null 2>&1; then
     ok "Proxy already reachable: $PROXY_URL"
   else
-    warn "Proxy not currently running; normal claude launches start it automatically"
+    warn "Proxy not currently running; normal claude-go launches start it automatically"
   fi
 
   if [[ "$failed" -eq 0 ]]; then
@@ -950,7 +950,7 @@ maybe_handle_model_command() {
   fi
 
   if [[ "$#" -eq 1 && "${1:-}" == "--api" ]]; then
-    die "Usage: claude --api <opencode-go-api-key>"
+    die "Usage: claude-go --api <opencode-go-api-key>"
   fi
 
   if [[ "$#" -eq 1 && "${1:-}" == "--complete-models" ]]; then
@@ -963,12 +963,12 @@ maybe_handle_model_command() {
       fish)
         cat <<'FISH'
 function __claude_opencode_go_models
-    command claude --complete-models 2>/dev/null
+    command claude-go --complete-models 2>/dev/null
 end
 
-complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
-complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
-complete -c claude -f -a 'setup doctor status logs traces trace update models' -d 'Claude Go command'
+complete -c claude-go -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
+complete -c claude-go -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
+complete -c claude-go -f -a 'setup doctor status logs traces trace update models' -d 'Claude Go command'
 FISH
         ;;
       bash)
@@ -980,7 +980,7 @@ _claude_opencode_completion() {
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
   if [[ "$prev" == "--model" || "$prev" == "-m" ]]; then
-    mapfile -t COMPREPLY < <(compgen -W "$(command claude --complete-models 2>/dev/null)" -- "$cur")
+    mapfile -t COMPREPLY < <(compgen -W "$(command claude-go --complete-models 2>/dev/null)" -- "$cur")
     return 0
   fi
 
@@ -989,7 +989,7 @@ _claude_opencode_completion() {
   fi
 }
 
-complete -F _claude_opencode_completion claude
+complete -F _claude_opencode_completion claude-go
 BASH
         ;;
       *)

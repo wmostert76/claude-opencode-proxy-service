@@ -40,31 +40,31 @@ curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-go/main/scripts/b
 This single command:
 - Downloads Claude Go to `~/.local/share/claude-go`
 - Installs Claude Code if you don't have it yet
-- Creates a `claude` wrapper that starts the proxy automatically
+- Creates a `claude-go` command that starts the proxy automatically
 
 Then set your API key:
 
 ```bash
-claude --api sk-your-opencode-go-key
+claude-go --api sk-your-opencode-go-key
 ```
 
-Done. Use Claude Code as normal.
+Done. Use `claude-go` just like Claude Code.
 
 ---
 
 ## Usage
 
 ```bash
-claude                         # Start Claude Code
-claude -p "Review auth.ts"     # One-shot prompt
-claude --version               # Check version
+claude-go                       # Start Claude Code
+claude-go -p "Review auth.ts"   # One-shot prompt
+claude-go --version             # Check version
 ```
 
 Switch models anytime:
 
 ```bash
-claude --model deepseek-v4-pro
-claude --model kimi-k2.6
+claude-go --model deepseek-v4-pro
+claude-go --model kimi-k2.6
 ```
 
 Or inside Claude Code: `/model deepseek-v4-pro`
@@ -75,24 +75,24 @@ Or inside Claude Code: `/model deepseek-v4-pro`
 
 | Command | What it does |
 |---|---|
-| `claude` | Start Claude Code through the proxy |
-| `claude --api <key>` | Store your OpenCode Go API key |
-| `claude --model` | List available models |
-| `claude --model <name>` | Set your default model |
-| `claude --prompt <text>` | Set a persistent system prompt |
-| `claude --prompt-clear` | Remove the system prompt |
-| `claude setup` | Interactive setup wizard |
-| `claude doctor` | Diagnose your setup |
-| `claude status` | Show proxy status and config paths |
-| `claude logs` | View recent proxy logs |
-| `claude logs --follow` | Watch logs in real time |
-| `claude traces` | Show recent request traces |
-| `claude traces --errors` | Show failed requests |
-| `claude traces --slow` | Show slowest requests |
-| `claude traces --cost` | Show most expensive requests |
-| `claude trace <id>` | Full trace for a specific request |
-| `claude update` | Update to the latest version |
-| `claude models --test` | Test connectivity to all 14 models |
+| `claude-go` | Start Claude Code through the proxy |
+| `claude-go --api <key>` | Store your OpenCode Go API key |
+| `claude-go --model` | List available models |
+| `claude-go --model <name>` | Set your default model |
+| `claude-go --prompt <text>` | Set a persistent system prompt |
+| `claude-go --prompt-clear` | Remove the system prompt |
+| `claude-go setup` | Interactive setup wizard |
+| `claude-go doctor` | Diagnose your setup |
+| `claude-go status` | Show proxy status and config paths |
+| `claude-go logs` | View recent proxy logs |
+| `claude-go logs --follow` | Watch logs in real time |
+| `claude-go traces` | Show recent request traces |
+| `claude-go traces --errors` | Show failed requests |
+| `claude-go traces --slow` | Show slowest requests |
+| `claude-go traces --cost` | Show most expensive requests |
+| `claude-go trace <id>` | Full trace for a specific request |
+| `claude-go update` | Update to the latest version |
+| `claude-go models --test` | Test connectivity to all 14 models |
 
 ---
 
@@ -122,7 +122,7 @@ Claude Code sends Anthropic-formatted messages. The proxy translates:
 The proxy handles format translation only. Claude Code provides the tools and runs them locally. The model decides which tool to use.
 
 Under the hood:
-1. The `claude` wrapper starts the proxy on port 8082
+1. The `claude-go` wrapper starts the proxy on port 8082
 2. `ANTHROPIC_BASE_URL` is set to the proxy
 3. Claude Code talks to the proxy as if it were the Anthropic API
 4. The proxy translates and forwards to OpenCode Go
@@ -171,7 +171,7 @@ Each trace records:
 - Token usage
 - Error details (redacted)
 
-Inspect with `claude traces`, `claude traces --errors`, or `claude trace <id>`.
+Inspect with `claude-go traces`, `claude-go traces --errors`, or `claude-go trace <id>`.
 
 The proxy retries transient failures and can fail over to alternative models.
 
@@ -196,10 +196,10 @@ The proxy retries transient failures and can fail over to alternative models.
 ## Troubleshooting
 
 ```bash
-claude doctor           # Check everything
-claude status           # Show config and proxy state
-claude logs             # View logs
-claude models --test    # Test all models
+claude-go doctor           # Check everything
+claude-go status           # Show config and proxy state
+claude-go logs             # View logs
+claude-go models --test    # Test all models
 ```
 
 Check if the port is alive:
@@ -219,7 +219,7 @@ Restore direct Claude Code (without the proxy):
 ## Updating
 
 ```bash
-claude update
+claude-go update
 ```
 
 ---
@@ -241,7 +241,7 @@ bin/claude-opencode              Wrapper and management commands
 proxy/anthropic2openai-proxy.mjs Protocol translator
 scripts/bootstrap.sh             One-line installer
 scripts/install.sh               Local setup
-scripts/uninstall.sh             Restore direct Claude Code
+scripts/uninstall.sh               Remove claude-go symlink
 VERSION                          Current version
 ```
 
@@ -249,10 +249,10 @@ VERSION                          Current version
 
 ## FAQ
 
-**Does this modify Claude Code?** No. Claude Code is installed normally. The wrapper redirects its traffic through the proxy.
+**Does this modify Claude Code?** No. Claude Go installs a private copy of Claude Code inside its own directory. Your system's `claude` command (if installed) is never touched.
 
-**Is my API key safe?** Yes. Stored locally in `~/.config/claude-go/config.json` with restricted permissions. Never committed or sent anywhere but OpenCode Go.
+**Can I still use Claude Code directly?** Yes. Claude Go uses its own `claude-go` command. Any existing `claude` command continues to work directly with Anthropic's API.
 
-**Can I still use Claude Code directly?** Yes. Run `scripts/uninstall.sh` to restore the direct symlink.
+**How do I uninstall?** Run `~/.local/share/claude-go/scripts/uninstall.sh`. This removes only the `claude-go` symlink. Your system `claude` command and Claude Code are untouched.
 
 **Do all Claude Code tools work?** Yes — Read, Write, Edit, Bash, WebFetch, WebSearch, Task, Agent, and all native tools work across every model.

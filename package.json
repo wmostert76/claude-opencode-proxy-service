@@ -1,6 +1,6 @@
 {
   "name": "claude-go",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Run Claude Code through OpenCode Go using a local Anthropic-to-OpenAI protocol proxy.",
   "type": "module",
   "bin": {
