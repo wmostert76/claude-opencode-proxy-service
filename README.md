@@ -70,7 +70,7 @@ Every normal `claude` launch starts the proxy and shows a compact status panel:
 ```text
 Claude OpenCode Proxy Service
 ─────────────────────────────
-  Release    v0.4.0
+  Release    v0.5.0
   State      ready
   Proxy      http://127.0.0.1:8082
   Provider   OpenCode Go
@@ -105,7 +105,11 @@ claude status
 claude logs
 claude logs --follow
 claude traces
+claude traces --errors
+claude traces --slow
+claude traces --cost
 claude trace <trace-id>
+claude delegate -p "inspect this repo and suggest one small fix"
 claude update
 claude models --test
 ```
@@ -265,12 +269,18 @@ VERSION                          base release version
 | `claude logs` | Shows the latest proxy logs |
 | `claude logs --follow` | Follows proxy logs live |
 | `claude traces` | Shows recent request traces |
+| `claude traces --errors` | Shows recent failed traces |
+| `claude traces --slow` | Shows slowest traces |
+| `claude traces --cost` | Shows highest token/cost traces |
 | `claude trace <trace-id>` | Shows one trace as JSON |
+| `claude delegate <args...>` | Starts Claude Code with built-in tools enabled for explicit local dev delegation |
 | `claude update` | Re-runs the GitHub one-line installer in-place |
 | `claude models --test` | Tests every OpenCode Go model with a small pong request |
 | `claude --model` | Shows the ranked OpenCode Go model table |
 | `claude --model <model>` | Stores the default OpenCode Go model |
 | `claude --api <key>` | Stores the OpenCode Go API key |
+
+Normal `claude` launches disable Claude Code built-in tools. Use `claude delegate ...` only when you explicitly want a local development agent with file and shell tools available.
 
 ---
 
@@ -322,6 +332,9 @@ Inspect traces:
 ```bash
 claude traces
 claude traces 50
+claude traces --errors
+claude traces --slow 10
+claude traces --cost 10
 claude trace <trace-id>
 ```
 

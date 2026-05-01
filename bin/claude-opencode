@@ -47,6 +47,7 @@ STATUS_STARTED_PROXY=0
 SANITIZED_ARGS=()
 CUSTOM_SYSTEM_PROMPT=""
 SESSION_SYSTEM_PROMPT=""
+DELEGATE_MODE=0
 
 version() {
   if [[ -r "$VERSION_FILE" ]]; then
@@ -664,29 +665,65 @@ show_logs() {
 }
 
 show_traces() {
-  local limit="${1:-20}"
+  local mode="recent"
+  local limit="20"
+
+  case "${1:-}" in
+    --errors|--slow|--cost)
+      mode="${1#--}"
+      limit="${2:-20}"
+      ;;
+    "" )
+      ;;
+    * )
+      limit="$1"
+      ;;
+  esac
 
   [[ -r "$TRACE_LOG" ]] || die "Trace log not found: $TRACE_LOG"
-  TRACE_LOG_PATH="$TRACE_LOG" LIMIT="$limit" python3 <<'PY'
+  TRACE_LOG_PATH="$TRACE_LOG" LIMIT="$limit" MODE="$mode" python3 <<'PY'
 import json
 import os
-from collections import deque
 
 path = os.environ["TRACE_LOG_PATH"]
 limit = int(os.environ["LIMIT"])
+mode = os.environ["MODE"]
 
 rows = []
 with open(path, "r", encoding="utf-8") as f:
-    for line in deque(f, maxlen=limit):
+    for line in f:
         try:
             rows.append(json.loads(line))
         except Exception:
             pass
 
-headers = ("Trace", "Status", "Model", "Final", "ms", "Retries", "Fetches", "Tokens")
+if mode == "errors":
+    rows = [trace for trace in rows if trace.get("status") != "ok"]
+elif mode == "slow":
+    rows = sorted(rows, key=lambda trace: trace.get("latencyMs") or 0, reverse=True)
+elif mode == "cost":
+    rows = sorted(
+        rows,
+        key=lambda trace: (
+            float((trace.get("usage") or {}).get("cost") or 0),
+            int((trace.get("usage") or {}).get("totalTokens") or 0),
+        ),
+        reverse=True,
+    )
+
+if mode in ("recent", "errors"):
+    rows = rows[-limit:]
+else:
+    rows = rows[:limit]
+
+headers = ("Trace", "Status", "Model", "Final", "ms", "Retries", "Fetches", "Tokens", "Cost")
 def tokens(trace):
     usage = trace.get("usage") or {}
     return str(usage.get("totalTokens") or usage.get("inputTokens") or "?")
+
+def cost(trace):
+    usage = trace.get("usage") or {}
+    return str(usage.get("cost") or "?")
 
 table = []
 for trace in rows:
@@ -699,6 +736,7 @@ for trace in rows:
         str(trace.get("retries", 0)),
         str(len(trace.get("webFetches", []))),
         tokens(trace),
+        cost(trace),
     ))
 
 widths = [len(h) for h in headers]
@@ -887,6 +925,10 @@ test_models() {
 maybe_handle_model_command() {
   if [[ "$#" -ge 1 ]]; then
     case "${1:-}" in
+      delegate)
+        DELEGATE_MODE=1
+        return 64
+        ;;
       setup)
         run_setup
         return 0
@@ -904,7 +946,7 @@ maybe_handle_model_command() {
         return 0
         ;;
       traces)
-        show_traces "${2:-20}"
+        show_traces "${2:-}" "${3:-}"
         return 0
         ;;
       trace)
@@ -960,7 +1002,7 @@ end
 
 complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
 complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
-complete -c claude -f -a 'setup doctor status logs traces trace update models' -d 'Claude OpenCode command'
+complete -c claude -f -a 'delegate setup doctor status logs traces trace update models' -d 'Claude OpenCode command'
 FISH
         ;;
       bash)
@@ -977,7 +1019,7 @@ _claude_opencode_completion() {
   fi
 
   if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "--api --model --help --version setup doctor status logs traces trace update models" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--api --model --help --version delegate setup doctor status logs traces trace update models" -- "$cur") )
   fi
 }
 
@@ -1102,18 +1144,33 @@ main() {
   stop_existing_proxy
   trap cleanup EXIT INT TERM
   start_proxy
-  sanitize_claude_args "$@"
-  claude_cmd=(
-    "$REAL_CLAUDE"
-    --allow-dangerously-skip-permissions
-    --tools ""
-    --model "$DEFAULT_MODEL"
-    --append-system-prompt "$SESSION_SYSTEM_PROMPT"
-  )
+
+  if [[ "$DELEGATE_MODE" == "1" ]]; then
+    shift
+    claude_cmd=(
+      "$REAL_CLAUDE"
+      --allow-dangerously-skip-permissions
+      --model "$DEFAULT_MODEL"
+      --append-system-prompt "$SESSION_SYSTEM_PROMPT"
+    )
+  else
+    sanitize_claude_args "$@"
+    claude_cmd=(
+      "$REAL_CLAUDE"
+      --allow-dangerously-skip-permissions
+      --tools ""
+      --model "$DEFAULT_MODEL"
+      --append-system-prompt "$SESSION_SYSTEM_PROMPT"
+    )
+  fi
   if [[ -n "$CUSTOM_SYSTEM_PROMPT" ]]; then
     claude_cmd+=(--append-system-prompt "$CUSTOM_SYSTEM_PROMPT")
   fi
-  claude_cmd+=("${SANITIZED_ARGS[@]}")
+  if [[ "$DELEGATE_MODE" == "1" ]]; then
+    claude_cmd+=("$@")
+  else
+    claude_cmd+=("${SANITIZED_ARGS[@]}")
+  fi
 
   ANTHROPIC_BASE_URL="$PROXY_URL" \
     ANTHROPIC_API_KEY="claude-opencode-local-proxy" \
