@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Start Claude Code through the local Anthropic -> OpenAI proxy for OpenCode Go.
+# Any arguments passed to this script are forwarded to Claude Code.
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROXY_SCRIPT="${PROXY_SCRIPT:-$SCRIPT_DIR/../proxy/anthropic2openai-proxy.mjs}"
+readonly REAL_CLAUDE="${REAL_CLAUDE:-$HOME/.local/share/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}"
+readonly CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+readonly PROXY_HOST="${PROXY_HOST:-127.0.0.1}"
+readonly PROXY_PORT="${PROXY_PORT:-8082}"
+readonly PROXY_URL="http://$PROXY_HOST:$PROXY_PORT"
+DEFAULT_MODEL="${DEFAULT_MODEL:-}"
+
+PROXY_PID=""
+API_KEY=""
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+port_pids() {
+  local pids=""
+
+  if command -v fuser >/dev/null 2>&1; then
+    pids="$(fuser "$PROXY_PORT/tcp" 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$pids" ]] && command -v ss >/dev/null 2>&1; then
+    pids="$(
+      ss -ltnp "sport = :$PROXY_PORT" 2>/dev/null \
+        | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' \
+        | sort -u
+    )"
+  fi
+
+  printf '%s\n' "$pids" | xargs -r -n1
+}
+
+stop_existing_proxy() {
+  local pids
+  pids="$(port_pids)"
+
+  [[ -z "$pids" ]] && return 0
+
+  printf 'Killing old proxy on %s (PID %s)...\n' "$PROXY_URL" "$(printf '%s' "$pids" | tr '\n' ' ')"
+  kill $pids 2>/dev/null || true
+
+  for _ in {1..20}; do
+    [[ -z "$(port_pids)" ]] && return 0
+    sleep 0.1
+  done
+
+  printf 'Old proxy did not exit cleanly; forcing it down...\n' >&2
+  kill -9 $pids 2>/dev/null || true
+}
+
+read_api_key() {
+  SETTINGS_PATH="$CLAUDE_SETTINGS" python3 <<'PY'
+import json
+import os
+import sys
+
+settings_path = os.environ["SETTINGS_PATH"]
+try:
+    with open(settings_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception as exc:
+    print(f"Could not read {settings_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+key = cfg.get("env", {}).get("ANTHROPIC_API_KEY", "")
+if not key:
+    sys.exit(2)
+
+print(key)
+PY
+}
+
+list_go_models() {
+  CONFIG_PATH="$HOME/.config/opencode/opencode.json" python3 <<'PY'
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+rank = [
+    ("deepseek-v4-pro", "Best overall", "strong reasoning/coding"),
+    ("glm-5.1", "Strong", "balanced coding"),
+    ("kimi-k2.6", "Strong", "long-context coding"),
+    ("minimax-m2.7", "Agent-safe", "works well with Claude tools"),
+    ("qwen3.6-plus", "Strong", "fast general coding"),
+    ("deepseek-v4-flash", "Fast/cheap", "huge context"),
+    ("glm-5", "Good", "older GLM"),
+    ("kimi-k2.5", "Good", "older Kimi"),
+    ("minimax-m2.5", "Good", "older MiniMax"),
+    ("qwen3.5-plus", "Good", "older Qwen"),
+    ("mimo-v2.5-pro", "Specialized", "coding/general"),
+    ("mimo-v2.5", "Specialized", "coding/general"),
+    ("mimo-v2-pro", "Specialized", "coding/general"),
+    ("mimo-v2-omni", "Specialized", "omni/general"),
+]
+
+fallback_limits = {
+    "deepseek-v4-pro": (262000, 64000),
+    "deepseek-v4-flash": (1000000, 384000),
+    "glm-5.1": (202752, 32768),
+    "glm-5": (202752, 32768),
+}
+
+def c(code):
+    if os.environ.get("NO_COLOR"):
+        return ""
+    return f"\033[{code}m"
+
+reset = c("0")
+bold = c("1")
+green = c("32")
+cyan = c("36")
+yellow = c("33")
+magenta = c("35")
+dim = c("2")
+
+def fmt_tokens(value):
+    if not value:
+        return "?"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.0f}M"
+    if value >= 1000:
+        return f"{value // 1000}k"
+    return str(value)
+
+def fmt_cost(value):
+    if value is None:
+        return "?"
+    return f"${value:g}"
+
+def parse_verbose_models(text):
+    models = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line.startswith("opencode-go/"):
+            i += 1
+            continue
+        model_id = line.split("/", 1)[1]
+        i += 1
+        block = []
+        depth = 0
+        started = False
+        while i < len(lines):
+            cur = lines[i]
+            stripped = cur.strip()
+            if stripped.startswith("opencode-go/") and not started:
+                break
+            if "{" in cur:
+                started = True
+            if started:
+                block.append(cur)
+                depth += cur.count("{") - cur.count("}")
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+        if block:
+            try:
+                models[model_id] = json.loads("\n".join(block))
+            except Exception:
+                models[model_id] = {"id": model_id}
+    return models
+
+def load_models():
+    if shutil.which("opencode"):
+        try:
+            out = subprocess.check_output(
+                ["opencode", "models", "opencode-go", "--verbose"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=8,
+            )
+            parsed = parse_verbose_models(out)
+            if parsed:
+                return parsed
+        except Exception:
+            pass
+
+    config_path = os.environ["CONFIG_PATH"]
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return {
+            model_id: {"id": model_id, **meta}
+            for model_id, meta in cfg.get("provider", {}).get("opencode-go", {}).get("models", {}).items()
+        }
+    except Exception:
+        return {}
+
+models = load_models()
+known_rank = {model: idx for idx, (model, _, _) in enumerate(rank)}
+rank_meta = {model: (tier, note) for model, tier, note in rank}
+
+ordered = sorted(
+    models,
+    key=lambda model: (known_rank.get(model, 999), model),
+)
+
+headers = ("#", "Model", "Tier", "Context", "Output", "In/MTok", "Out/MTok", "Notes")
+rows = []
+for idx, model_id in enumerate(ordered, 1):
+    meta = models.get(model_id, {})
+    limit = meta.get("limit", {}) or {}
+    cost = meta.get("cost", {}) or {}
+    context, output = fallback_limits.get(model_id, (limit.get("context"), limit.get("output")))
+    tier, note = rank_meta.get(model_id, ("Available", "OpenCode Go"))
+    rows.append((
+        str(idx),
+        f"opencode-go/{model_id}",
+        tier,
+        fmt_tokens(context),
+        fmt_tokens(output),
+        fmt_cost(cost.get("input")),
+        fmt_cost(cost.get("output")),
+        note,
+    ))
+
+if not rows:
+    print("No OpenCode Go models found.", file=sys.stderr)
+    sys.exit(1)
+
+widths = [len(h) for h in headers]
+for row in rows:
+    widths = [max(widths[i], len(row[i])) for i in range(len(headers))]
+
+def line(parts):
+    return "  ".join(parts[i].ljust(widths[i]) for i in range(len(parts)))
+
+print(f"{bold}OpenCode Go models ranked best to fallback{reset}")
+print(f"{dim}Use: claude --model <model>   Example: claude --model deepseek-v4-pro{reset}\n")
+print(bold + line(headers) + reset)
+print(dim + line(tuple("-" * w for w in widths)) + reset)
+for row in rows:
+    color = green if row[0] == "1" else cyan if int(row[0]) <= 5 else yellow if "flash" in row[1] else magenta if int(row[0]) <= 10 else dim
+    print(color + line(row) + reset)
+PY
+}
+
+normalize_go_model() {
+  local model="$1"
+  model="${model#opencode-go/}"
+  printf '%s\n' "$model"
+}
+
+list_go_model_ids() {
+  if command -v opencode >/dev/null 2>&1; then
+    opencode models opencode-go 2>/dev/null | sed 's#^opencode-go/##'
+    return 0
+  fi
+
+  CONFIG_PATH="$HOME/.config/opencode/opencode.json" python3 <<'PY'
+import json
+import os
+import sys
+
+config_path = os.environ["CONFIG_PATH"]
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception as exc:
+    print(f"Could not read {config_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+for model in sorted(cfg.get("provider", {}).get("opencode-go", {}).get("models", {})):
+    print(model)
+PY
+}
+
+model_exists() {
+  local wanted
+  wanted="$(normalize_go_model "$1")"
+  list_go_model_ids | grep -Fxq -- "$wanted"
+}
+
+read_default_model() {
+  SETTINGS_PATH="$CLAUDE_SETTINGS" python3 <<'PY'
+import json
+import os
+
+settings_path = os.environ["SETTINGS_PATH"]
+try:
+    with open(settings_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+print(cfg.get("model") or "deepseek-v4-pro")
+PY
+}
+
+set_default_model() {
+  local model
+  model="$(normalize_go_model "$1")"
+
+  if ! model_exists "$model"; then
+    printf 'Unknown OpenCode Go model: %s\n\n' "$1" >&2
+    printf 'Available OpenCode Go models:\n' >&2
+    list_go_models >&2
+    return 1
+  fi
+
+  SETTINGS_PATH="$CLAUDE_SETTINGS" MODEL="$model" python3 <<'PY'
+import json
+import os
+
+settings_path = os.environ["SETTINGS_PATH"]
+model = os.environ["MODEL"]
+
+try:
+    with open(settings_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+cfg["model"] = model
+
+with open(settings_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+
+  chmod 600 "$CLAUDE_SETTINGS"
+  printf 'Default OpenCode Go model set to: opencode-go/%s\n' "$model"
+}
+
+maybe_handle_model_command() {
+  if [[ "$#" -eq 1 && "${1:-}" == "--complete-models" ]]; then
+    list_go_model_ids
+    return 0
+  fi
+
+  if [[ "$#" -eq 2 && "${1:-}" == "--completion" ]]; then
+    case "${2:-}" in
+      fish)
+        cat <<'FISH'
+function __claude_opencode_go_models
+    command claude --complete-models 2>/dev/null
+end
+
+complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
+complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
+FISH
+        ;;
+      bash)
+        cat <<'BASH'
+_claude_opencode_completion() {
+  local cur prev
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  if [[ "$prev" == "--model" || "$prev" == "-m" ]]; then
+    mapfile -t COMPREPLY < <(compgen -W "$(command claude --complete-models 2>/dev/null)" -- "$cur")
+    return 0
+  fi
+
+  if [[ "$cur" == --* ]]; then
+    COMPREPLY=( $(compgen -W "--model --help --version" -- "$cur") )
+  fi
+}
+
+complete -F _claude_opencode_completion claude
+BASH
+        ;;
+      *)
+        die "Unsupported completion shell: $2"
+        ;;
+    esac
+    return 0
+  fi
+
+  if [[ "$#" -eq 1 && ( "${1:-}" == "--model" || "${1:-}" == "-m" ) ]]; then
+    list_go_models
+    return 0
+  fi
+
+  if [[ "$#" -eq 2 && ( "${1:-}" == "--model" || "${1:-}" == "-m" ) ]]; then
+    set_default_model "$2"
+    return 0
+  fi
+
+  return 1
+}
+
+start_proxy() {
+  printf 'Starting proxy on %s\n' "$PROXY_URL"
+  printf 'Forwarding to OpenCode Go (%s)\n\n' "$DEFAULT_MODEL"
+
+  env \
+    ANTHROPIC_API_KEY="$API_KEY" \
+    OPENCODE_GO_MODEL="$DEFAULT_MODEL" \
+    PROXY_PORT="$PROXY_PORT" \
+    node "$PROXY_SCRIPT" &
+
+  PROXY_PID="$!"
+
+  for _ in {1..30}; do
+    if curl -fsS "$PROXY_URL/health" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+      wait "$PROXY_PID" 2>/dev/null || true
+      die "Proxy exited before becoming ready"
+    fi
+
+    sleep 0.2
+  done
+
+  die "Proxy did not become ready at $PROXY_URL"
+}
+
+cleanup() {
+  local status=$?
+
+  if [[ -n "$PROXY_PID" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
+    kill "$PROXY_PID" 2>/dev/null || true
+    wait "$PROXY_PID" 2>/dev/null || true
+  fi
+
+  exit "$status"
+}
+
+main() {
+  if maybe_handle_model_command "$@"; then
+    return 0
+  fi
+
+  need_cmd node
+  need_cmd python3
+  need_cmd curl
+
+  [[ -f "$PROXY_SCRIPT" ]] || die "Proxy script not found: $PROXY_SCRIPT"
+  [[ -x "$REAL_CLAUDE" ]] || die "Claude binary not found or not executable: $REAL_CLAUDE"
+  [[ -r "$CLAUDE_SETTINGS" ]] || die "Claude settings not readable: $CLAUDE_SETTINGS"
+
+  API_KEY="$(read_api_key)" || die "Could not read ANTHROPIC_API_KEY from $CLAUDE_SETTINGS"
+  [[ -n "$API_KEY" ]] || die "ANTHROPIC_API_KEY is empty in $CLAUDE_SETTINGS"
+  DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
+
+  stop_existing_proxy
+  trap cleanup EXIT INT TERM
+  start_proxy
+
+  "$REAL_CLAUDE" --allow-dangerously-skip-permissions "$@"
+}
+
+main "$@"

@@ -1,0 +1,17 @@
+{
+  "name": "claude-opencode-proxy-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run Claude Code through OpenCode Go using a local Anthropic-to-OpenAI-compatible proxy.",
+  "type": "module",
+  "bin": {
+    "claude-opencode": "bin/claude-opencode"
+  },
+  "scripts": {
+    "check": "node --check proxy/anthropic2openai-proxy.mjs && bash -n bin/claude-opencode scripts/install.sh scripts/uninstall.sh",
+    "models": "bin/claude-opencode --model"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
