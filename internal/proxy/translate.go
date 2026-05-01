@@ -242,6 +242,11 @@ func TranslateMessages(anthropicMsgs []AnthropicMessage) []OpenAIMessage {
 
 		ce := resolveContent(msg.Content)
 
+		// Skip user/assistant message if content is fully tool_results
+		if len(toolMsgs) > 0 && ce.text == "" && len(ce.images) == 0 && len(ce.toolCalls) == 0 {
+			continue
+		}
+
 		// Build content — if images present, use array format
 		var content any
 		if len(ce.images) > 0 && msg.Role == "user" {
@@ -373,10 +378,11 @@ func HasImageContent(areq AnthropicRequest) bool {
 var VisionModel = "kimi-k2.6"
 
 var visionModels = map[string]bool{
-	"kimi-k2.6": true,
-	"kimi-k2.5": true,
-	"glm-5.1":   true,
-	"glm-5":     true,
+	"kimi-k2.6":   true,
+	"kimi-k2.5":   true,
+	"glm-5.1":     true,
+	"glm-5":       true,
+	"mimo-v2-omni": true,
 }
 
 func NeedsVisionModel(areq AnthropicRequest, currentModel string) (string, bool) {
@@ -543,7 +549,9 @@ func OpenAIToAnthropic(resp OpenAIResponse) AnthropicResponse {
 		if s, ok := ch.Message.Content.(string); ok {
 			text = s
 		}
-		if text == "" {
+		// Only fallback to reasoning_content when there are no tool calls —
+		// otherwise the model's thinking leaks into the text block
+		if text == "" && len(ch.Message.ToolCalls) == 0 {
 			if s, ok := ch.Message.ReasoningContent.(string); ok {
 				text = s
 			}
