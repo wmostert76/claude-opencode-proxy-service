@@ -43,7 +43,6 @@ DEFAULT_MODEL="${DEFAULT_MODEL:-}"
 
 PROXY_PID=""
 API_KEY=""
-STATUS_STARTED_PROXY=0
 CUSTOM_SYSTEM_PROMPT=""
 SESSION_SYSTEM_PROMPT=""
 
@@ -127,7 +126,7 @@ config_path = os.environ["CONFIG_PATH"]
 try:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
-except Exception as exc:
+except Exception:
     cfg = {}
 
 key = cfg.get("apiKey", "")
@@ -304,7 +303,6 @@ list_go_models() {
   CONFIG_PATH="$HOME/.config/opencode/opencode.json" python3 <<'PY'
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
