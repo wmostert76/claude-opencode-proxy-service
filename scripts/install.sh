@@ -43,7 +43,12 @@ ensure_npm_prefix() {
 
 ensure_claude_code() {
   if [[ -x "$REAL_CLAUDE" ]]; then
-    return 0
+    if grep -q 'claude-opencode-proxy-service/bin/claude-opencode' "$REAL_CLAUDE" 2>/dev/null; then
+      echo "Claude Code binary points back to the wrapper; reinstalling Claude Code..."
+      npm uninstall -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
+    else
+      return 0
+    fi
   fi
 
   echo "Claude Code not found; installing @anthropic-ai/claude-code..."
@@ -74,6 +79,10 @@ if [[ -e "$WRAPPER" && ! -L "$WRAPPER" && ! -f "$WRAPPER" ]]; then
   echo "Error: refusing to replace non-regular file: $WRAPPER" >&2
   exit 1
 fi
+
+# npm may install `bin/claude` as a hardlink to Claude Code's real binary.
+# Remove the link first so writing our wrapper cannot overwrite Claude Code itself.
+rm -f "$WRAPPER"
 
 cat > "$WRAPPER" <<EOF
 #!/usr/bin/env bash
