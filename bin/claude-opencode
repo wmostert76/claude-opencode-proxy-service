@@ -47,7 +47,6 @@ STATUS_STARTED_PROXY=0
 SANITIZED_ARGS=()
 CUSTOM_SYSTEM_PROMPT=""
 SESSION_SYSTEM_PROMPT=""
-DELEGATE_MODE=0
 
 version() {
   if [[ -r "$VERSION_FILE" ]]; then
@@ -337,7 +336,7 @@ rank = [
     ("deepseek-v4-pro", "Best overall", "strong reasoning/coding"),
     ("glm-5.1", "Strong", "balanced coding"),
     ("kimi-k2.6", "Strong", "long-context coding"),
-    ("minimax-m2.7", "Agent-safe", "works well with Claude tools"),
+    ("minimax-m2.7", "Agent-safe", "stable compatibility fallback"),
     ("qwen3.6-plus", "Strong", "fast general coding"),
     ("deepseek-v4-flash", "Fast/cheap", "huge context"),
     ("glm-5", "Good", "older GLM"),
@@ -925,10 +924,6 @@ test_models() {
 maybe_handle_model_command() {
   if [[ "$#" -ge 1 ]]; then
     case "${1:-}" in
-      delegate)
-        DELEGATE_MODE=1
-        return 64
-        ;;
       setup)
         run_setup
         return 0
@@ -1002,7 +997,7 @@ end
 
 complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
 complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
-complete -c claude -f -a 'delegate setup doctor status logs traces trace update models' -d 'Claude OpenCode command'
+complete -c claude -f -a 'setup doctor status logs traces trace update models' -d 'Claude OpenCode command'
 FISH
         ;;
       bash)
@@ -1019,7 +1014,7 @@ _claude_opencode_completion() {
   fi
 
   if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "--api --model --help --version delegate setup doctor status logs traces trace update models" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--api --model --help --version setup doctor status logs traces trace update models" -- "$cur") )
   fi
 }
 
@@ -1145,32 +1140,18 @@ main() {
   trap cleanup EXIT INT TERM
   start_proxy
 
-  if [[ "$DELEGATE_MODE" == "1" ]]; then
-    shift
-    claude_cmd=(
-      "$REAL_CLAUDE"
-      --allow-dangerously-skip-permissions
-      --model "$DEFAULT_MODEL"
-      --append-system-prompt "$SESSION_SYSTEM_PROMPT"
-    )
-  else
-    sanitize_claude_args "$@"
-    claude_cmd=(
-      "$REAL_CLAUDE"
-      --allow-dangerously-skip-permissions
-      --tools ""
-      --model "$DEFAULT_MODEL"
-      --append-system-prompt "$SESSION_SYSTEM_PROMPT"
-    )
-  fi
+  sanitize_claude_args "$@"
+  claude_cmd=(
+    "$REAL_CLAUDE"
+    --allow-dangerously-skip-permissions
+    --tools ""
+    --model "$DEFAULT_MODEL"
+    --append-system-prompt "$SESSION_SYSTEM_PROMPT"
+  )
   if [[ -n "$CUSTOM_SYSTEM_PROMPT" ]]; then
     claude_cmd+=(--append-system-prompt "$CUSTOM_SYSTEM_PROMPT")
   fi
-  if [[ "$DELEGATE_MODE" == "1" ]]; then
-    claude_cmd+=("$@")
-  else
-    claude_cmd+=("${SANITIZED_ARGS[@]}")
-  fi
+  claude_cmd+=("${SANITIZED_ARGS[@]}")
 
   ANTHROPIC_BASE_URL="$PROXY_URL" \
     ANTHROPIC_API_KEY="claude-opencode-local-proxy" \

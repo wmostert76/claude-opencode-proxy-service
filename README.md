@@ -109,7 +109,6 @@ claude traces --errors
 claude traces --slow
 claude traces --cost
 claude trace <trace-id>
-claude delegate -p "inspect this repo and suggest one small fix"
 claude update
 claude models --test
 ```
@@ -144,7 +143,7 @@ Use: claude --model <model>   Example: claude --model deepseek-v4-pro
 1   opencode-go/deepseek-v4-pro    Best overall  262k     64k     $1.74    $3.48     strong reasoning/coding
 2   opencode-go/glm-5.1            Strong        202k     32k     $1.4     $4.4      balanced coding
 3   opencode-go/kimi-k2.6          Strong        262k     65k     $0.32    $1.34     long-context coding
-4   opencode-go/minimax-m2.7       Agent-safe    204k     131k    $0.3     $1.2      works well with Claude tools
+4   opencode-go/minimax-m2.7       Agent-safe    204k     131k    $0.3     $1.2      stable compatibility fallback
 5   opencode-go/qwen3.6-plus       Strong        262k     65k     $0.5     $3        fast general coding
 ```
 
@@ -273,14 +272,13 @@ VERSION                          base release version
 | `claude traces --slow` | Shows slowest traces |
 | `claude traces --cost` | Shows highest token/cost traces |
 | `claude trace <trace-id>` | Shows one trace as JSON |
-| `claude delegate <args...>` | Starts Claude Code with built-in tools enabled for explicit local dev delegation |
 | `claude update` | Re-runs the GitHub one-line installer in-place |
 | `claude models --test` | Tests every OpenCode Go model with a small pong request |
 | `claude --model` | Shows the ranked OpenCode Go model table |
 | `claude --model <model>` | Stores the default OpenCode Go model |
 | `claude --api <key>` | Stores the OpenCode Go API key |
 
-Normal `claude` launches disable Claude Code built-in tools. Use `claude delegate ...` only when you explicitly want a local development agent with file and shell tools available.
+Normal `claude` launches disable Claude Code built-in tools. The proxy keeps model-facing web access inside its own `web_fetch` flow instead of exposing Claude Code shell/file tools.
 
 ---
 
