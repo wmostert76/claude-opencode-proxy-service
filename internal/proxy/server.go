@@ -318,5 +318,7 @@ func ProxyInfo(version, model string) {
 	fmt.Printf("  Provider   OpenCode Go\n")
 	fmt.Printf("  Model      %s\n", model)
 	fmt.Printf("  Tools      all Claude Code native tools\n")
-	fmt.Printf("─────────────────────────────\n\n")
+	fmt.Printf("─────────────────────────────\n")
+	fmt.Printf("  Claude-Go is an idea by WAM-Software since 1997.\n")
+	fmt.Printf("  Code provided by OpenCode and DeepSeek V4 Pro.\n\n")
 }

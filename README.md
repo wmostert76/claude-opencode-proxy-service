@@ -4,6 +4,8 @@
 
 **Use Claude Code with OpenCode Go models — all 14 of them.**
 
+*Claude-Go is an idea by WAM-Software since 1997. Code provided by OpenCode and DeepSeek V4 Pro.*
+
 [![Release](https://img.shields.io/github/v/release/wmostert76/claude-go?label=release)](https://github.com/wmostert76/claude-go/releases)
 [![Go](https://img.shields.io/badge/go-1.23+-00ADD8)](https://go.dev)
 [![Install](https://img.shields.io/badge/install-curl%20%7C%20bash-0a7)](#install)
