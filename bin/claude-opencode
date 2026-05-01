@@ -82,26 +82,6 @@ fail() {
   printf '%s%s%s %s\n' "$(color 31)" "FAIL" "$(color 0)" "$*"
 }
 
-sanitize_claude_args() {
-  SANITIZED_ARGS=()
-
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      --tools|--allowedTools|--allowed-tools|--disallowedTools|--disallowed-tools)
-        shift
-        [[ "$#" -gt 0 ]] && shift
-        ;;
-      --tools=*|--allowedTools=*|--allowed-tools=*|--disallowedTools=*|--disallowed-tools=*)
-        shift
-        ;;
-      *)
-        SANITIZED_ARGS+=("$1")
-        shift
-        ;;
-    esac
-  done
-}
-
 port_pids() {
   local pids=""
 
@@ -574,13 +554,10 @@ build_session_system_prompt() {
   release="v$(version)"
 
   cat <<EOF
-You are Claude Open Proxy Service ${release}.
-You are a senior coding agent working through a local OpenCode Go proxy.
-Present yourself as Claude Open Proxy Service when the user asks who you are.
-Behave like a direct, expert software engineering assistant with strong debugging and implementation skills.
-Claude Code built-in tools are disabled in this environment.
-If you need public web content, use the available web_fetch tool through the proxy.
-Do not claim to be using Anthropic-hosted models directly in this environment.
+You are Claude Open Proxy Service ${release} running through OpenCode Go.
+You are a direct, expert software engineering assistant with full access to all standard Claude Code tools.
+Use tools proactively: read files before editing, run commands to verify work, and fetch URLs when needed.
+Do not claim to be using Anthropic-hosted models directly.
 EOF
 }
 
@@ -1095,9 +1072,8 @@ print_startup_table() {
   printf '  %-10s %s\n' "State" "${g}${state}${r}"
   printf '  %-10s %s\n' "Proxy" "${c}${PROXY_URL}${r}"
   printf '  %-10s %s\n' "Provider" "OpenCode Go"
-  printf '  %-10s %s\n' "Model" "opencode-go/${DEFAULT_MODEL}"
-  printf '  %-10s %s\n' "Forced" "yes (--model ${DEFAULT_MODEL})"
-  printf '  %-10s %s\n' "Tools" "proxy web_fetch"
+  printf '  %-10s %s\n' "Model" "auto (via /v1/models discovery)"
+  printf '  %-10s %s\n' "Tools" "all Claude Code native tools"
   printf '  %-10s %s\n' "Config" "$CONFIG_FILE"
   printf '  %-10s %s\n' "Log" "$LOG_FILE"
   printf '  %-10s %s\n' "Mode" "Claude Code passthrough + local adapter"
@@ -1140,18 +1116,15 @@ main() {
   trap cleanup EXIT INT TERM
   start_proxy
 
-  sanitize_claude_args "$@"
   claude_cmd=(
     "$REAL_CLAUDE"
-    --allow-dangerously-skip-permissions
-    --tools ""
-    --model "$DEFAULT_MODEL"
+    --dangerously-skip-permissions
     --append-system-prompt "$SESSION_SYSTEM_PROMPT"
   )
   if [[ -n "$CUSTOM_SYSTEM_PROMPT" ]]; then
     claude_cmd+=(--append-system-prompt "$CUSTOM_SYSTEM_PROMPT")
   fi
-  claude_cmd+=("${SANITIZED_ARGS[@]}")
+  claude_cmd+=("$@")
 
   ANTHROPIC_BASE_URL="$PROXY_URL" \
     ANTHROPIC_API_KEY="claude-opencode-local-proxy" \
