@@ -420,11 +420,6 @@ func AnthropicToOpenAI(areq AnthropicRequest, defaultModel string) OpenAIRequest
 		req.ToolChoice = "auto"
 	}
 
-	// Qwen models don't support tool_choice:required in thinking mode
-	if strings.HasPrefix(model, "qwen") && req.ToolChoice == "required" {
-		req.ToolChoice = "auto"
-	}
-
 	if areq.Temperature != nil {
 		req.Temperature = *areq.Temperature
 	}
@@ -442,8 +437,8 @@ func AnthropicToOpenAI(areq AnthropicRequest, defaultModel string) OpenAIRequest
 		req.Messages = append([]OpenAIMessage{sysMsg}, req.Messages...)
 	}
 
-	// Disable DeepSeek thinking
-	if strings.HasPrefix(model, "deepseek-") {
+	// Disable thinking for models that need it
+	if strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "qwen") {
 		req.Thinking = map[string]string{"type": "disabled"}
 	}
 

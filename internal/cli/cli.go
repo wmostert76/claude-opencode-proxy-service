@@ -3,10 +3,14 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/wmostert76/claude-go/internal/config"
 	"github.com/wmostert76/claude-go/internal/proxy"
@@ -402,7 +406,68 @@ func runTrace(args []string) error {
 }
 
 func runUpdate() error {
-	return fmt.Errorf("Update not implemented yet")
+	repoURL := "https://github.com/wmostert76/claude-go/releases/latest/download"
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+	if arch == "amd64" {
+		arch = "amd64"
+	} else if arch == "arm64" {
+		arch = "arm64"
+	}
+
+	url := fmt.Sprintf("%s/claude-go-%s-%s", repoURL, osName, arch)
+	fmt.Printf("Downloading %s...\n", url)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("download failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return fmt.Errorf("no release found — first release is built by CI on push to main")
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	// Write to temp file
+	tmp, err := os.CreateTemp("", "claude-go-update-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		return err
+	}
+	tmp.Close()
+
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
+		return err
+	}
+
+	// Verify it runs
+	cmd := exec.Command(tmp.Name(), "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("downloaded binary verification failed: %v", err)
+	}
+	newVer := strings.TrimSpace(string(out))
+
+	// Find current binary
+	binPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	// Replace
+	if err := os.Rename(tmp.Name(), binPath); err != nil {
+		return fmt.Errorf("replace failed: %v — try: mv %s %s", err, tmp.Name(), binPath)
+	}
+
+	fmt.Printf("\nUpdated to %s\n", newVer)
+	return nil
 }
 
 func runInstall() error {
@@ -462,13 +527,92 @@ func testModels() error {
 
 	fmt.Printf("Testing %d OpenCode Go models...\n\n", len(models))
 	passed, failed := 0, 0
-	for _, model := range models {
-		passed++
-		_ = model
-		fmt.Printf("  OK   opencode-go/%-25s\n", model)
+
+	type result struct {
+		model string
+		ok    bool
+		ms    int64
+		err   string
 	}
-	fmt.Printf("\nResult: %d tested, %d failed\n", passed, failed)
+	results := make([]result, len(models))
+	done := make(chan int, len(models))
+
+	for i, model := range models {
+		go func(idx int, m string) {
+			start := time.Now()
+			ok, err := pingModel(cfg.APIKey, m)
+			r := result{model: m, ok: ok, ms: time.Since(start).Milliseconds()}
+			if !ok {
+				r.err = err
+			}
+			results[idx] = r
+			done <- idx
+		}(i, model)
+	}
+
+	for range models {
+		<-done
+	}
+
+	for _, r := range results {
+		if r.ok {
+			passed++
+			fmt.Printf("  OK   opencode-go/%-25s %7dms\n", r.model, r.ms)
+		} else {
+			failed++
+			errMsg := r.err
+			if len(errMsg) > 40 {
+				errMsg = errMsg[:40]
+			}
+			fmt.Printf("  FAIL opencode-go/%-25s %7dms  %s\n", r.model, r.ms, errMsg)
+		}
+	}
+
+	fmt.Printf("\nResult: %d passed, %d failed, %d total\n", passed, failed, passed+failed)
 	return nil
+}
+
+func pingModel(apiKey, model string) (bool, string) {
+	body := fmt.Sprintf(`{"model":"%s","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`, model)
+	req, _ := http.NewRequest("POST", proxy.Target, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return false, string(b)
+	}
+
+	var data struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&data)
+	if data.Error.Message != "" {
+		return false, data.Error.Message
+	}
+	if len(data.Choices) > 0 {
+		c := data.Choices[0].Message
+		if c.Content != "" || c.ReasoningContent != "" || c.Reasoning != "" {
+			return true, ""
+		}
+	}
+	return false, "empty response"
 }
 
 func listModelIDs() error {
