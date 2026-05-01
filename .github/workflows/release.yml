@@ -50,7 +50,7 @@ jobs:
           fi
 
           cat > release-notes.md <<NOTES
-          ## Claude OpenCode Proxy Service v${BASE}
+          ## Claude Go v${BASE}
 
           Automated release for commit \`${GITHUB_SHA}\`.
 

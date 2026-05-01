@@ -8,10 +8,10 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROXY_SCRIPT="${PROXY_SCRIPT:-$SCRIPT_DIR/../proxy/anthropic2openai-proxy.mjs}"
 readonly REAL_CLAUDE="${REAL_CLAUDE:-$HOME/.local/share/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}"
 readonly CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
-readonly CONFIG_FILE="${CLAUDE_OPENCODE_CONFIG:-$HOME/.config/claude-opencode-proxy/config.json}"
+readonly CONFIG_FILE="${CLAUDE_GO_CONFIG:-$HOME/.config/claude-go/config.json}"
 readonly VERSION_FILE="${VERSION_FILE:-$SCRIPT_DIR/../VERSION}"
-readonly LOG_FILE="${CLAUDE_OPENCODE_LOG:-$HOME/.cache/claude-opencode-proxy/proxy.log}"
-readonly TRACE_LOG="${CLAUDE_OPENCODE_TRACE_LOG:-$HOME/.cache/claude-opencode-proxy/traces.jsonl}"
+readonly LOG_FILE="${CLAUDE_GO_LOG:-$HOME/.cache/claude-go/proxy.log}"
+readonly TRACE_LOG="${CLAUDE_GO_TRACE_LOG:-$HOME/.cache/claude-go/traces.jsonl}"
 CONFIG_PROXY_HOST="$(CONFIG_PATH="$CONFIG_FILE" python3 <<'PY' 2>/dev/null || true
 import json
 import os
@@ -161,7 +161,7 @@ except Exception:
 
 env = cfg.setdefault("env", {})
 env["ANTHROPIC_BASE_URL"] = proxy_url
-env["ANTHROPIC_API_KEY"] = "claude-opencode-local-proxy"
+env["ANTHROPIC_API_KEY"] = "claude-go-local-proxy"
 
 os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 with open(settings_path, "w", encoding="utf-8") as f:
@@ -630,7 +630,7 @@ show_logs() {
   if [[ "$mode" == "--follow" || "$mode" == "-f" ]]; then
     tail -f "$LOG_FILE"
   else
-    tail -n "${CLAUDE_OPENCODE_LOG_LINES:-80}" "$LOG_FILE"
+    tail -n "${CLAUDE_GO_LOG_LINES:-80}" "$LOG_FILE"
   fi
 }
 
@@ -757,7 +757,7 @@ PY
 run_doctor() {
   local failed=0
 
-  printf 'Claude OpenCode doctor v%s\n\n' "$(version)"
+  printf 'Claude Go doctor v%s\n\n' "$(version)"
 
   for cmd in node npm python3 curl tar; do
     if command -v "$cmd" >/dev/null 2>&1; then
@@ -815,7 +815,7 @@ run_setup() {
   local key=""
   local model=""
 
-  printf 'Claude OpenCode setup v%s\n\n' "$(version)"
+  printf 'Claude Go setup v%s\n\n' "$(version)"
   printf 'OpenCode Go API key: '
   read -r key
   set_api_key "$key"
@@ -838,9 +838,9 @@ run_update() {
   need_cmd curl
   need_cmd tar
 
-  printf 'Updating Claude OpenCode Proxy Service in %s\n' "$install_dir"
-  CLAUDE_OPENCODE_HOME="$install_dir" \
-    bash -c 'curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-opencode-proxy-service/main/scripts/bootstrap.sh | bash'
+  printf 'Updating Claude Go in %s\n' "$install_dir"
+  CLAUDE_GO_HOME="$install_dir" \
+    bash -c 'curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-go/main/scripts/bootstrap.sh | bash'
 }
 
 test_one_model() {
@@ -849,9 +849,9 @@ test_one_model() {
 
   start_ms="$(date +%s%3N)"
   result="$(
-    curl -fsS -m "${CLAUDE_OPENCODE_TEST_TIMEOUT:-45}" \
+    curl -fsS -m "${CLAUDE_GO_TEST_TIMEOUT:-45}" \
       -H 'Content-Type: application/json' \
-      -H 'x-api-key: claude-opencode-local-proxy' \
+      -H 'x-api-key: claude-go-local-proxy' \
       -H 'x-claude-opencode-no-failover: 1' \
       -d "{\"model\":\"$model\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"Reply exactly: pong\"}]}" \
       "$PROXY_URL/v1/messages" 2>&1
@@ -877,7 +877,7 @@ test_models() {
   load_runtime_config
   stop_existing_proxy
   trap cleanup EXIT INT TERM
-  CLAUDE_OPENCODE_QUIET=1 start_proxy
+  CLAUDE_GO_QUIET=1 start_proxy
 
   printf 'Testing OpenCode Go models through %s\n\n' "$PROXY_URL"
   while IFS= read -r model; do
@@ -968,7 +968,7 @@ end
 
 complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
 complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
-complete -c claude -f -a 'setup doctor status logs traces trace update models' -d 'Claude OpenCode command'
+complete -c claude -f -a 'setup doctor status logs traces trace update models' -d 'Claude Go command'
 FISH
         ;;
       bash)
@@ -1015,7 +1015,7 @@ BASH
 start_proxy() {
   mkdir -p "$(dirname "$LOG_FILE")"
 
-  if [[ "${CLAUDE_OPENCODE_DEBUG:-0}" == "1" ]]; then
+  if [[ "${CLAUDE_GO_DEBUG:-0}" == "1" ]]; then
     env \
       ANTHROPIC_API_KEY="$API_KEY" \
       OPENCODE_GO_MODEL="$DEFAULT_MODEL" \
@@ -1051,7 +1051,7 @@ start_proxy() {
 print_startup_table() {
   local state="$1"
 
-  [[ "${CLAUDE_OPENCODE_QUIET:-0}" == "1" ]] && return 0
+  [[ "${CLAUDE_GO_QUIET:-0}" == "1" ]] && return 0
   [[ "${NO_COLOR:-}" ]] && local b="" d="" g="" c="" r="" || {
     local b=$'\033[1m'
     local d=$'\033[2m'
@@ -1060,7 +1060,7 @@ print_startup_table() {
     local r=$'\033[0m'
   }
 
-  printf '%s\n' "${b}Claude OpenCode Proxy Service${r}"
+  printf '%s\n' "${b}Claude Go${r}"
   printf '%s\n' "${d}─────────────────────────────${r}"
   printf '  %-10s %s\n' "Release" "v$(version)"
   printf '  %-10s %s\n' "State" "${g}${state}${r}"
@@ -1121,7 +1121,7 @@ main() {
   claude_cmd+=("$@")
 
   ANTHROPIC_BASE_URL="$PROXY_URL" \
-    ANTHROPIC_API_KEY="claude-opencode-local-proxy" \
+    ANTHROPIC_API_KEY="claude-go-local-proxy" \
     "${claude_cmd[@]}"
 }
 

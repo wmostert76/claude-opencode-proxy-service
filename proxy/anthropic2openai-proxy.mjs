@@ -20,10 +20,10 @@ const TARGET = "https://opencode.ai/zen/go/v1/chat/completions";
 const MODELS_URL = "https://opencode.ai/zen/go/v1/models";
 const API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const DEFAULT_MODEL = process.env.OPENCODE_GO_MODEL || "deepseek-v4-pro";
-const TRACE_LOG = process.env.CLAUDE_OPENCODE_TRACE_LOG || `${process.env.HOME || "."}/.cache/claude-opencode-proxy/traces.jsonl`;
-const RETRY_ATTEMPTS = parseInt(process.env.CLAUDE_OPENCODE_RETRY_ATTEMPTS || "2", 10);
-const RETRY_BASE_MS = parseInt(process.env.CLAUDE_OPENCODE_RETRY_BASE_MS || "350", 10);
-const FALLBACK_MODELS = (process.env.CLAUDE_OPENCODE_FALLBACK_MODELS || "glm-5.1,kimi-k2.6,minimax-m2.7,qwen3.6-plus")
+const TRACE_LOG = process.env.CLAUDE_GO_TRACE_LOG || `${process.env.HOME || "."}/.cache/claude-go/traces.jsonl`;
+const RETRY_ATTEMPTS = parseInt(process.env.CLAUDE_GO_RETRY_ATTEMPTS || "2", 10);
+const RETRY_BASE_MS = parseInt(process.env.CLAUDE_GO_RETRY_BASE_MS || "350", 10);
+const FALLBACK_MODELS = (process.env.CLAUDE_GO_FALLBACK_MODELS || "glm-5.1,kimi-k2.6,minimax-m2.7,qwen3.6-plus")
   .split(",")
   .map(m => m.trim())
   .filter(Boolean);

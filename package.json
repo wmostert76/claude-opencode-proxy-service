@@ -1,7 +1,7 @@
 {
-  "name": "claude-opencode-proxy-service",
-  "version": "0.8.0",
-  "description": "Run Claude Code through OpenCode Go using a local Anthropic-to-OpenAI-compatible proxy.",
+  "name": "claude-go",
+  "version": "1.0.0",
+  "description": "Run Claude Code through OpenCode Go using a local Anthropic-to-OpenAI protocol proxy.",
   "type": "module",
   "bin": {
     "claude-opencode": "bin/claude-opencode"

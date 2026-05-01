@@ -24,7 +24,7 @@ version() {
 }
 
 print_header() {
-  echo "Claude OpenCode Proxy Service"
+  echo "Claude Go"
   echo "─────────────────────────────"
   printf '  %-10s v%s\n' "Release" "$(version)"
   printf '  %-10s %s\n' "Install" "$ROOT_DIR"
@@ -43,7 +43,7 @@ ensure_npm_prefix() {
 
 ensure_claude_code() {
   if [[ -x "$REAL_CLAUDE" ]]; then
-    if grep -q 'claude-opencode-proxy-service/bin/claude-opencode' "$REAL_CLAUDE" 2>/dev/null; then
+    if grep -q 'claude-go/bin/claude-opencode' "$REAL_CLAUDE" 2>/dev/null; then
       echo "Claude Code binary points back to the wrapper; reinstalling Claude Code..."
       npm uninstall -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
     else
@@ -91,7 +91,7 @@ EOF
 
 chmod +x "$WRAPPER"
 
-echo "Installed Claude OpenCode wrapper:"
+echo "Installed Claude Go wrapper:"
 echo "  $WRAPPER -> $TARGET"
 echo
 echo "Next setup step:"

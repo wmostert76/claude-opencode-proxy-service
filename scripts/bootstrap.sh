@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly REPO="${CLAUDE_OPENCODE_REPO:-wmostert76/claude-opencode-proxy-service}"
-readonly INSTALL_DIR="${CLAUDE_OPENCODE_HOME:-$HOME/.local/share/claude-opencode-proxy-service}"
+readonly REPO="${CLAUDE_GO_REPO:-wmostert76/claude-go}"
+readonly INSTALL_DIR="${CLAUDE_GO_HOME:-$HOME/.local/share/claude-go}"
 readonly ARCHIVE_URL="https://github.com/$REPO/archive/refs/heads/main.tar.gz"
 
 need_cmd() {
@@ -37,5 +37,5 @@ chmod +x "$INSTALL_DIR/bin/claude-opencode" "$INSTALL_DIR/scripts/install.sh" "$
 "$INSTALL_DIR/scripts/install.sh"
 
 echo
-echo "Installed Claude OpenCode Proxy Service in:"
+echo "Installed Claude Go in:"
 echo "  $INSTALL_DIR"
