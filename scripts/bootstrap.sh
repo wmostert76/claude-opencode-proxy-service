@@ -24,6 +24,16 @@ echo "Downloading Claude Go for ${OS}/${ARCH}..."
 curl -fsSL "$URL" -o "$BIN_DIR/claude-go"
 chmod +x "$BIN_DIR/claude-go"
 
+# Install shell completions
+if [ -d "$HOME/.config/fish/completions" ]; then
+	"$BIN_DIR/claude-go" --completion fish > "$HOME/.config/fish/completions/claude-go.fish" 2>/dev/null || true
+	echo "Fish completions installed"
+fi
+if [ -d "$HOME/.local/share/bash-completion/completions" ]; then
+	"$BIN_DIR/claude-go" --completion bash > "$HOME/.local/share/bash-completion/completions/claude-go" 2>/dev/null || true
+	echo "Bash completions installed"
+fi
+
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   SHELL_NAME="$(basename "$SHELL")"
   RC_FILE=""

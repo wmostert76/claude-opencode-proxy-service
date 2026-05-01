@@ -487,7 +487,12 @@ func runInstall() error {
 		cmd.Dir = installDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		fmt.Println("Setting up shell completions...")
+		installCompletions()
+		return nil
 	}
 
 	fmt.Println("Updating Claude Code...")
@@ -495,7 +500,12 @@ func runInstall() error {
 	cmd.Dir = installDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	fmt.Println("Setting up shell completions...")
+	installCompletions()
+	return nil
 }
 
 func runUninstall() error {
@@ -650,21 +660,16 @@ func listModelIDs() error {
 	return nil
 }
 
-func generateCompletion(args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("Usage: claude-go --completion <bash|fish>")
-	}
-	switch args[1] {
-	case "fish":
-		fmt.Println(`function __claude_opencode_go_models
+const fishCompletionScript = `function __claude_opencode_go_models
     command claude-go --complete-models 2>/dev/null
 end
 
 complete -c claude-go -l model -x -a '(__claude_opencode_go_models)' -d 'Set default model'
 complete -c claude-go -s m -x -a '(__claude_opencode_go_models)' -d 'Set default model'
-complete -c claude-go -f -a 'setup doctor status logs traces trace update models' -d 'Claude Go command'`)
-	case "bash":
-		fmt.Println(`_claude_opencode_completion() {
+complete -c claude-go -f -a 'setup doctor status logs traces trace update models' -d 'Claude Go command'
+`
+
+const bashCompletionScript = `_claude_opencode_completion() {
   local cur prev
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
@@ -677,7 +682,32 @@ complete -c claude-go -f -a 'setup doctor status logs traces trace update models
     COMPREPLY=( $(compgen -W "--api --model --help --version setup doctor status logs traces trace update models" -- "$cur") )
   fi
 }
-complete -F _claude_opencode_completion claude-go`)
+complete -F _claude_opencode_completion claude-go
+`
+
+func installCompletions() {
+	home, _ := os.UserHomeDir()
+
+	// Fish
+	fishDir := filepath.Join(home, ".config", "fish", "completions")
+	os.MkdirAll(fishDir, 0o755)
+	os.WriteFile(filepath.Join(fishDir, "claude-go.fish"), []byte(fishCompletionScript), 0o644)
+
+	// Bash
+	bashDir := filepath.Join(home, ".local", "share", "bash-completion", "completions")
+	os.MkdirAll(bashDir, 0o755)
+	os.WriteFile(filepath.Join(bashDir, "claude-go"), []byte(bashCompletionScript), 0o644)
+}
+
+func generateCompletion(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("Usage: claude-go --completion <bash|fish>")
+	}
+	switch args[1] {
+	case "fish":
+		fmt.Print(fishCompletionScript)
+	case "bash":
+		fmt.Print(bashCompletionScript)
 	}
 	return nil
 }
