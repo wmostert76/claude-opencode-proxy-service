@@ -172,6 +172,10 @@ function anthropicToOpenAI(body) {
     messages: [],
   };
 
+  if (req.model.startsWith("deepseek-")) {
+    req.thinking = { type: "disabled" };
+  }
+
   // System prompt
   if (body.system) {
     let systemContent;
