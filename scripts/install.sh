@@ -63,3 +63,6 @@ chmod +x "$WRAPPER"
 
 echo "Installed Claude OpenCode wrapper:"
 echo "  $WRAPPER -> $TARGET"
+echo
+echo "Next setup step:"
+echo "  claude --api <opencode-go-api-key>"

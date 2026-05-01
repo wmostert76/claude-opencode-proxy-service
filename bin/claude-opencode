@@ -8,13 +8,48 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROXY_SCRIPT="${PROXY_SCRIPT:-$SCRIPT_DIR/../proxy/anthropic2openai-proxy.mjs}"
 readonly REAL_CLAUDE="${REAL_CLAUDE:-$HOME/.local/share/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}"
 readonly CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
-readonly PROXY_HOST="${PROXY_HOST:-127.0.0.1}"
-readonly PROXY_PORT="${PROXY_PORT:-8082}"
+readonly CONFIG_FILE="${CLAUDE_OPENCODE_CONFIG:-$HOME/.config/claude-opencode-proxy/config.json}"
+readonly VERSION_FILE="${VERSION_FILE:-$SCRIPT_DIR/../VERSION}"
+readonly LOG_FILE="${CLAUDE_OPENCODE_LOG:-$HOME/.cache/claude-opencode-proxy/proxy.log}"
+CONFIG_PROXY_HOST="$(CONFIG_PATH="$CONFIG_FILE" python3 <<'PY' 2>/dev/null || true
+import json
+import os
+
+try:
+    with open(os.environ["CONFIG_PATH"], "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    print(cfg.get("proxy", {}).get("host", ""))
+except Exception:
+    pass
+PY
+)"
+CONFIG_PROXY_PORT="$(CONFIG_PATH="$CONFIG_FILE" python3 <<'PY' 2>/dev/null || true
+import json
+import os
+
+try:
+    with open(os.environ["CONFIG_PATH"], "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    print(cfg.get("proxy", {}).get("port", ""))
+except Exception:
+    pass
+PY
+)"
+readonly PROXY_HOST="${PROXY_HOST:-${CONFIG_PROXY_HOST:-127.0.0.1}}"
+readonly PROXY_PORT="${PROXY_PORT:-${CONFIG_PROXY_PORT:-8082}}"
 readonly PROXY_URL="http://$PROXY_HOST:$PROXY_PORT"
 DEFAULT_MODEL="${DEFAULT_MODEL:-}"
 
 PROXY_PID=""
 API_KEY=""
+
+version() {
+  if [[ -r "$VERSION_FILE" ]]; then
+    tr -d '[:space:]' < "$VERSION_FILE"
+  else
+    printf 'dev'
+  fi
+}
 
 die() {
   printf 'Error: %s\n' "$*" >&2
@@ -62,25 +97,133 @@ stop_existing_proxy() {
 }
 
 read_api_key() {
-  SETTINGS_PATH="$CLAUDE_SETTINGS" python3 <<'PY'
+  CONFIG_PATH="$CONFIG_FILE" LEGACY_SETTINGS_PATH="$CLAUDE_SETTINGS" python3 <<'PY'
 import json
 import os
 import sys
 
-settings_path = os.environ["SETTINGS_PATH"]
+config_path = os.environ["CONFIG_PATH"]
 try:
-    with open(settings_path, "r", encoding="utf-8") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 except Exception as exc:
-    print(f"Could not read {settings_path}: {exc}", file=sys.stderr)
-    sys.exit(1)
+    cfg = {}
 
-key = cfg.get("env", {}).get("ANTHROPIC_API_KEY", "")
+key = cfg.get("apiKey", "")
+if not key:
+    legacy_path = os.environ["LEGACY_SETTINGS_PATH"]
+    try:
+        with open(legacy_path, "r", encoding="utf-8") as f:
+            legacy = json.load(f)
+        key = legacy.get("env", {}).get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        key = ""
 if not key:
     sys.exit(2)
 
 print(key)
 PY
+}
+
+sync_claude_settings() {
+  SETTINGS_PATH="$CLAUDE_SETTINGS" PROXY_URL_VALUE="$PROXY_URL" python3 <<'PY'
+import json
+import os
+
+settings_path = os.environ["SETTINGS_PATH"]
+proxy_url = os.environ["PROXY_URL_VALUE"]
+
+try:
+    with open(settings_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+env = cfg.setdefault("env", {})
+env["ANTHROPIC_BASE_URL"] = proxy_url
+env["ANTHROPIC_API_KEY"] = "claude-opencode-local-proxy"
+
+os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+with open(settings_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+
+  chmod 600 "$CLAUDE_SETTINGS"
+}
+
+set_api_key() {
+  local key="${1:-}"
+
+  [[ -n "$key" ]] || die "Usage: claude --api <opencode-go-api-key>"
+
+  CONFIG_PATH="$CONFIG_FILE" API_KEY="$key" DEFAULT_MODEL_VALUE="${DEFAULT_MODEL:-deepseek-v4-pro}" PROXY_HOST_VALUE="$PROXY_HOST" PROXY_PORT_VALUE="$PROXY_PORT" python3 <<'PY'
+import json
+import os
+
+config_path = os.environ["CONFIG_PATH"]
+api_key = os.environ["API_KEY"]
+
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+cfg["apiKey"] = api_key
+cfg.setdefault("model", os.environ["DEFAULT_MODEL_VALUE"])
+cfg["proxy"] = {
+    "host": os.environ["PROXY_HOST_VALUE"],
+    "port": int(os.environ["PROXY_PORT_VALUE"]),
+}
+
+os.makedirs(os.path.dirname(config_path), exist_ok=True)
+with open(config_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+
+  chmod 600 "$CONFIG_FILE"
+  sync_claude_settings
+  printf 'OpenCode Go API key stored in %s\n' "$CONFIG_FILE"
+  printf 'Claude settings now point to local proxy in %s\n' "$CLAUDE_SETTINGS"
+}
+
+ensure_proxy_config() {
+  CONFIG_PATH="$CONFIG_FILE" API_KEY="$API_KEY" MODEL="$DEFAULT_MODEL" PROXY_HOST_VALUE="$PROXY_HOST" PROXY_PORT_VALUE="$PROXY_PORT" python3 <<'PY'
+import json
+import os
+
+config_path = os.environ["CONFIG_PATH"]
+
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+changed = False
+if not cfg.get("apiKey"):
+    cfg["apiKey"] = os.environ["API_KEY"]
+    changed = True
+if not cfg.get("model"):
+    cfg["model"] = os.environ["MODEL"]
+    changed = True
+if "proxy" not in cfg:
+    cfg["proxy"] = {
+        "host": os.environ["PROXY_HOST_VALUE"],
+        "port": int(os.environ["PROXY_PORT_VALUE"]),
+    }
+    changed = True
+
+if changed:
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+PY
+
+  chmod 600 "$CONFIG_FILE"
 }
 
 list_go_models() {
@@ -290,18 +433,26 @@ model_exists() {
 }
 
 read_default_model() {
-  SETTINGS_PATH="$CLAUDE_SETTINGS" python3 <<'PY'
+  CONFIG_PATH="$CONFIG_FILE" LEGACY_SETTINGS_PATH="$CLAUDE_SETTINGS" python3 <<'PY'
 import json
 import os
 
-settings_path = os.environ["SETTINGS_PATH"]
 try:
-    with open(settings_path, "r", encoding="utf-8") as f:
+    with open(os.environ["CONFIG_PATH"], "r", encoding="utf-8") as f:
         cfg = json.load(f)
 except Exception:
     cfg = {}
 
-print(cfg.get("model") or "deepseek-v4-pro")
+model = cfg.get("model")
+if not model:
+    try:
+        with open(os.environ["LEGACY_SETTINGS_PATH"], "r", encoding="utf-8") as f:
+            legacy = json.load(f)
+        model = legacy.get("model")
+    except Exception:
+        model = None
+
+print(model or "deepseek-v4-pro")
 PY
 }
 
@@ -316,31 +467,46 @@ set_default_model() {
     return 1
   fi
 
-  SETTINGS_PATH="$CLAUDE_SETTINGS" MODEL="$model" python3 <<'PY'
+  CONFIG_PATH="$CONFIG_FILE" MODEL="$model" PROXY_HOST_VALUE="$PROXY_HOST" PROXY_PORT_VALUE="$PROXY_PORT" python3 <<'PY'
 import json
 import os
 
-settings_path = os.environ["SETTINGS_PATH"]
+config_path = os.environ["CONFIG_PATH"]
 model = os.environ["MODEL"]
 
 try:
-    with open(settings_path, "r", encoding="utf-8") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 except Exception:
     cfg = {}
 
 cfg["model"] = model
+cfg.setdefault("proxy", {
+    "host": os.environ["PROXY_HOST_VALUE"],
+    "port": int(os.environ["PROXY_PORT_VALUE"]),
+})
 
-with open(settings_path, "w", encoding="utf-8") as f:
+os.makedirs(os.path.dirname(config_path), exist_ok=True)
+with open(config_path, "w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
 PY
 
-  chmod 600 "$CLAUDE_SETTINGS"
+  chmod 600 "$CONFIG_FILE"
+  sync_claude_settings
   printf 'Default OpenCode Go model set to: opencode-go/%s\n' "$model"
 }
 
 maybe_handle_model_command() {
+  if [[ "$#" -eq 2 && "${1:-}" == "--api" ]]; then
+    set_api_key "$2"
+    return 0
+  fi
+
+  if [[ "$#" -eq 1 && "${1:-}" == "--api" ]]; then
+    die "Usage: claude --api <opencode-go-api-key>"
+  fi
+
   if [[ "$#" -eq 1 && "${1:-}" == "--complete-models" ]]; then
     list_go_model_ids
     return 0
@@ -372,7 +538,7 @@ _claude_opencode_completion() {
   fi
 
   if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "--model --help --version" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--api --model --help --version" -- "$cur") )
   fi
 }
 
@@ -400,19 +566,27 @@ BASH
 }
 
 start_proxy() {
-  printf 'Starting proxy on %s\n' "$PROXY_URL"
-  printf 'Forwarding to OpenCode Go (%s)\n\n' "$DEFAULT_MODEL"
+  mkdir -p "$(dirname "$LOG_FILE")"
 
-  env \
-    ANTHROPIC_API_KEY="$API_KEY" \
-    OPENCODE_GO_MODEL="$DEFAULT_MODEL" \
-    PROXY_PORT="$PROXY_PORT" \
-    node "$PROXY_SCRIPT" &
+  if [[ "${CLAUDE_OPENCODE_DEBUG:-0}" == "1" ]]; then
+    env \
+      ANTHROPIC_API_KEY="$API_KEY" \
+      OPENCODE_GO_MODEL="$DEFAULT_MODEL" \
+      PROXY_PORT="$PROXY_PORT" \
+      node "$PROXY_SCRIPT" &
+  else
+    env \
+      ANTHROPIC_API_KEY="$API_KEY" \
+      OPENCODE_GO_MODEL="$DEFAULT_MODEL" \
+      PROXY_PORT="$PROXY_PORT" \
+      node "$PROXY_SCRIPT" >>"$LOG_FILE" 2>&1 &
+  fi
 
   PROXY_PID="$!"
 
   for _ in {1..30}; do
     if curl -fsS "$PROXY_URL/health" >/dev/null 2>&1; then
+      print_startup_table "ready"
       return 0
     fi
 
@@ -425,6 +599,31 @@ start_proxy() {
   done
 
   die "Proxy did not become ready at $PROXY_URL"
+}
+
+print_startup_table() {
+  local state="$1"
+
+  [[ "${CLAUDE_OPENCODE_QUIET:-0}" == "1" ]] && return 0
+  [[ "${NO_COLOR:-}" ]] && local b="" d="" g="" c="" r="" || {
+    local b=$'\033[1m'
+    local d=$'\033[2m'
+    local g=$'\033[32m'
+    local c=$'\033[36m'
+    local r=$'\033[0m'
+  }
+
+  printf '%s\n' "${b}Claude OpenCode Proxy Service${r}"
+  printf '%s\n' "${d}─────────────────────────────${r}"
+  printf '  %-10s %s\n' "Release" "v$(version)"
+  printf '  %-10s %s\n' "State" "${g}${state}${r}"
+  printf '  %-10s %s\n' "Proxy" "${c}${PROXY_URL}${r}"
+  printf '  %-10s %s\n' "Provider" "OpenCode Go"
+  printf '  %-10s %s\n' "Model" "opencode-go/${DEFAULT_MODEL}"
+  printf '  %-10s %s\n' "Config" "$CONFIG_FILE"
+  printf '  %-10s %s\n' "Log" "$LOG_FILE"
+  printf '  %-10s %s\n' "Mode" "Claude Code passthrough + local adapter"
+  printf '%s\n\n' "${d}─────────────────────────────${r}"
 }
 
 cleanup() {
@@ -449,17 +648,20 @@ main() {
 
   [[ -f "$PROXY_SCRIPT" ]] || die "Proxy script not found: $PROXY_SCRIPT"
   [[ -x "$REAL_CLAUDE" ]] || die "Claude binary not found or not executable: $REAL_CLAUDE"
-  [[ -r "$CLAUDE_SETTINGS" ]] || die "Claude settings not readable: $CLAUDE_SETTINGS"
 
-  API_KEY="$(read_api_key)" || die "Could not read ANTHROPIC_API_KEY from $CLAUDE_SETTINGS"
-  [[ -n "$API_KEY" ]] || die "ANTHROPIC_API_KEY is empty in $CLAUDE_SETTINGS"
+  API_KEY="$(read_api_key)" || die "Could not read API key from $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
+  [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
   DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
+  ensure_proxy_config
+  sync_claude_settings
 
   stop_existing_proxy
   trap cleanup EXIT INT TERM
   start_proxy
 
-  "$REAL_CLAUDE" --allow-dangerously-skip-permissions "$@"
+  ANTHROPIC_BASE_URL="$PROXY_URL" \
+    ANTHROPIC_API_KEY="claude-opencode-local-proxy" \
+    "$REAL_CLAUDE" --allow-dangerously-skip-permissions "$@"
 }
 
 main "$@"

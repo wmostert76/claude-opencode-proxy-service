@@ -1,105 +1,297 @@
+<div align="center">
+
 # Claude OpenCode Proxy Service
 
-Run Claude Code through OpenCode Go models by starting a local Anthropic-compatible proxy before every `claude` invocation.
+**Use Claude Code like normal, but run it through OpenCode Go models.**
 
-The user-facing workflow stays the same:
+[![Release](https://img.shields.io/github/v/release/wmostert76/claude-opencode-proxy-service?include_prereleases&label=release)](https://github.com/wmostert76/claude-opencode-proxy-service/releases)
+[![Shell](https://img.shields.io/badge/shell-bash%20%2B%20fish-4eaa25)](#shell-completion)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-339933)](#requirements)
+[![Install](https://img.shields.io/badge/install-curl%20%7C%20bash-0a7)](#one-line-install)
+
+</div>
+
+---
+
+## Why
+
+Claude Code is a strong terminal workflow. OpenCode Go gives access to a fast model pool such as DeepSeek, Kimi, GLM, MiniMax, Qwen and Mimo.
+
+This project keeps the command you already use:
 
 ```bash
 claude
-claude -p "Reply exactly: pong"
-claude --model
-claude --model deepseek-v4-pro
 ```
 
-## What It Does
-
-- Keeps `claude` as the command you type.
-- Starts a local proxy on `127.0.0.1:8082`.
-- Translates Claude Code's Anthropic Messages API calls to OpenCode Go's OpenAI-compatible chat-completions endpoint.
-- Routes all configured models through OpenCode Go.
-- Adds `claude --model` as an OpenCode Go model picker.
-- Adds `claude --model <model>` to set the default model.
-- Always starts Claude Code with `--allow-dangerously-skip-permissions`.
-
-## Files
+but transparently starts a local adapter first:
 
 ```text
-bin/claude-opencode              Wrapper around Claude Code
-proxy/anthropic2openai-proxy.mjs Anthropic -> OpenAI-compatible proxy
-scripts/install.sh               Install wrapper as `claude`
-scripts/uninstall.sh             Restore direct Claude Code symlink
+Claude Code  ->  local Anthropic API adapter  ->  OpenCode Go chat/completions
 ```
 
-## Requirements
+No Anthropic model routing is used. The proxy is always in the path.
 
-- Node.js
-- Python 3
-- curl
-- `@anthropic-ai/claude-code`
-- `opencode-ai`
-- OpenCode Go API key in `~/.claude/settings.json` under `env.ANTHROPIC_API_KEY`
+---
 
-## Install
-
-One-click install:
+## One-Line Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-opencode-proxy-service/main/scripts/bootstrap.sh | bash
 ```
 
-This downloads the repo to:
+The installer:
 
-```text
-~/.local/share/claude-opencode-proxy-service
-```
+- downloads this repo to `~/.local/share/claude-opencode-proxy-service`
+- installs Claude Code with npm if missing
+- installs the `claude` wrapper into `~/.local/share/npm-global/bin/claude`
+- keeps your OpenCode Go API key in `~/.config/claude-opencode-proxy/config.json`
+- points Claude Code at the local proxy through `~/.claude/settings.json`
+- does not commit, print, or upload secrets
 
-It also installs Claude Code with npm if it is not already installed.
-
-Local install from a checkout:
-
-```bash
-./scripts/install.sh
-```
-
-The installer creates a `claude` wrapper in:
-
-```text
-~/.local/share/npm-global/bin/claude
-```
-
-The original Claude Code binary remains:
-
-```text
-~/.local/share/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
-```
-
-## Model Commands
-
-Show OpenCode Go models, ranked:
+Store your OpenCode Go API key once:
 
 ```bash
+claude --api sk-your-opencode-go-key
+```
+
+---
+
+## Startup Preview
+
+Every normal `claude` launch starts the proxy and shows a compact status panel:
+
+```text
+Claude OpenCode Proxy Service
+─────────────────────────────
+  Release    v0.2.0
+  State      ready
+  Proxy      http://127.0.0.1:8082
+  Provider   OpenCode Go
+  Model      opencode-go/deepseek-v4-pro
+  Config     /home/you/.config/claude-opencode-proxy/config.json
+  Log        /home/you/.cache/claude-opencode-proxy/proxy.log
+  Mode       Claude Code passthrough + local adapter
+─────────────────────────────
+```
+
+Set `CLAUDE_OPENCODE_QUIET=1` if you want to hide the panel.
+
+---
+
+## Daily Usage
+
+Use Claude Code as usual:
+
+```bash
+claude
+claude -p "Reply exactly: pong"
+claude --version
+```
+
+Model management is handled by this wrapper:
+
+```bash
+claude --api sk-your-opencode-go-key
 claude --model
-```
-
-Set default:
-
-```bash
 claude --model deepseek-v4-pro
 claude --model minimax-m2.7
 ```
 
-Completion data:
+The API key and selected model are stored in:
+
+```text
+~/.config/claude-opencode-proxy/config.json
+```
+
+---
+
+## Model Picker
+
+`claude --model` shows a ranked OpenCode Go table:
+
+```text
+OpenCode Go models ranked best to fallback
+Use: claude --model <model>   Example: claude --model deepseek-v4-pro
+
+#   Model                          Tier          Context  Output  In/MTok  Out/MTok  Notes
+--  -----------------------------  ------------  -------  ------  -------  --------  ----------------------------
+1   opencode-go/deepseek-v4-pro    Best overall  262k     64k     $1.74    $3.48     strong reasoning/coding
+2   opencode-go/glm-5.1            Strong        202k     32k     $1.4     $4.4      balanced coding
+3   opencode-go/kimi-k2.6          Strong        262k     65k     $0.32    $1.34     long-context coding
+4   opencode-go/minimax-m2.7       Agent-safe    204k     131k    $0.3     $1.2      works well with Claude tools
+5   opencode-go/qwen3.6-plus       Strong        262k     65k     $0.5     $3        fast general coding
+```
+
+Completion source:
 
 ```bash
 claude --complete-models
-claude --completion fish
-claude --completion bash
 ```
 
-Completion is not installed automatically by default.
+---
 
-## Notes
+## Shell Completion
 
-The proxy is intentionally always used. Direct Anthropic/Claude model routing is avoided.
+Completion is generated by the wrapper itself. Nothing is installed automatically.
 
-DeepSeek V4 Pro is the default "best overall" model. MiniMax M2.7 is a practical fallback when Claude Code tool behavior is more important than raw reasoning quality.
+Fish:
+
+```fish
+claude --completion fish | source
+```
+
+Persistent Fish completion:
+
+```fish
+mkdir -p ~/.config/fish/completions
+claude --completion fish > ~/.config/fish/completions/claude.fish
+```
+
+Bash:
+
+```bash
+eval "$(claude --completion bash)"
+```
+
+Persistent Bash completion:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+claude --completion bash > ~/.local/share/bash-completion/completions/claude
+```
+
+---
+
+## Requirements
+
+- Linux or another Unix-like shell environment
+- Node.js 20+
+- npm
+- Python 3
+- curl
+- tar
+- OpenCode Go API key
+
+The installer can install `@anthropic-ai/claude-code` automatically, but it does not install system packages such as Node.js.
+
+---
+
+## Configuration
+
+Proxy config:
+
+```json
+{
+  "apiKey": "sk-...",
+  "model": "deepseek-v4-pro",
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 8082
+  }
+}
+```
+
+Claude settings are kept generic and point Claude Code at the local adapter:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082",
+    "ANTHROPIC_API_KEY": "claude-opencode-local-proxy"
+  }
+}
+```
+
+The local adapter starts Claude Code with:
+
+```bash
+--allow-dangerously-skip-permissions
+```
+
+That behavior is intentional for this setup.
+
+---
+
+## Project Layout
+
+```text
+bin/claude-opencode              Claude wrapper and model picker
+proxy/anthropic2openai-proxy.mjs Anthropic Messages -> OpenAI-compatible adapter
+scripts/bootstrap.sh             curl | bash installer
+scripts/install.sh               local installer
+scripts/uninstall.sh             restore direct Claude Code symlink
+VERSION                          base release version
+```
+
+---
+
+## Releases
+
+Every push to `main` creates a GitHub release.
+
+Release tags use:
+
+```text
+v<VERSION>-<short-commit-sha>
+```
+
+Example:
+
+```text
+v0.2.0-97a9061
+```
+
+The base version lives in:
+
+```text
+VERSION
+```
+
+Update `VERSION` when you want to bump the visible product version. The GitHub release tag still includes the commit hash, so every sync produces a unique release.
+
+---
+
+## Troubleshooting
+
+Check the wrapper:
+
+```bash
+type -a claude
+claude --version
+```
+
+Check models:
+
+```bash
+claude --api sk-your-opencode-go-key
+claude --model
+claude --complete-models
+```
+
+Check proxy logs:
+
+```bash
+tail -f ~/.cache/claude-opencode-proxy/proxy.log
+```
+
+Check port cleanup:
+
+```bash
+ss -ltnp 'sport = :8082'
+```
+
+Restore the direct Claude Code symlink:
+
+```bash
+~/.local/share/claude-opencode-proxy-service/scripts/uninstall.sh
+```
+
+---
+
+## Security Notes
+
+- API keys are stored in `~/.config/claude-opencode-proxy/config.json`.
+- `~/.claude/settings.json` only points Claude Code at the local proxy.
+- API keys are not stored in this repository.
+- API keys are not printed by the installer.
+- The proxy listens only on `127.0.0.1`.

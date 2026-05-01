@@ -14,7 +14,7 @@ import http from "node:http";
 const PORT = parseInt(process.env.PROXY_PORT || "8082", 10);
 const TARGET = "https://opencode.ai/zen/go/v1/chat/completions";
 const API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const DEFAULT_MODEL = normalizeModel(process.env.OPENCODE_GO_MODEL || "deepseek-v4-pro");
+const DEFAULT_MODEL = normalizeModel(process.env.OPENCODE_GO_MODEL) || "deepseek-v4-pro";
 
 if (!API_KEY) {
   console.error("ANTHROPIC_API_KEY env var is required");
@@ -22,7 +22,7 @@ if (!API_KEY) {
 }
 
 function normalizeModel(model) {
-  if (!model || typeof model !== "string") return "deepseek-v4-pro";
+  if (!model || typeof model !== "string") return "";
   return model.replace(/^opencode-go\//, "");
 }
 
