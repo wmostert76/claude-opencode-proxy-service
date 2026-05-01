@@ -167,12 +167,13 @@ PY
 }
 
 sync_claude_settings() {
-  SETTINGS_PATH="$CLAUDE_SETTINGS" PROXY_URL_VALUE="$PROXY_URL" python3 <<'PY'
+  SETTINGS_PATH="$CLAUDE_SETTINGS" PROXY_URL_VALUE="$PROXY_URL" DEFAULT_MODEL_VALUE="${DEFAULT_MODEL:-deepseek-v4-pro}" python3 <<'PY'
 import json
 import os
 
 settings_path = os.environ["SETTINGS_PATH"]
 proxy_url = os.environ["PROXY_URL_VALUE"]
+default_model = os.environ["DEFAULT_MODEL_VALUE"]
 
 try:
     with open(settings_path, "r", encoding="utf-8") as f:
@@ -183,6 +184,7 @@ except Exception:
 env = cfg.setdefault("env", {})
 env["ANTHROPIC_BASE_URL"] = proxy_url
 env["ANTHROPIC_API_KEY"] = "claude-opencode-local-proxy"
+cfg["model"] = default_model
 
 os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 with open(settings_path, "w", encoding="utf-8") as f:
@@ -1011,6 +1013,7 @@ main() {
     "$REAL_CLAUDE"
     --allow-dangerously-skip-permissions
     --tools ""
+    --model "$DEFAULT_MODEL"
     --append-system-prompt "$SESSION_SYSTEM_PROMPT"
   )
   if [[ -n "$CUSTOM_SYSTEM_PROMPT" ]]; then
