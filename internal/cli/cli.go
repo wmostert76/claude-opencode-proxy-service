@@ -431,57 +431,42 @@ func runUpdate() error {
 		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 	}
 
-	// Write to temp file
-	tmp, err := os.CreateTemp("", "claude-go-update-*")
+	// Find current binary path
+	binPath, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+
+	// Download to temp file in same dir (avoids cross-device + text-file-busy)
+	dir := filepath.Dir(binPath)
+	tmp, err := os.CreateTemp(dir, ".claude-go-update-*")
+	if err != nil {
+		return fmt.Errorf("temp file failed: %v", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
 
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
-		return err
+		tmp.Close()
+		return fmt.Errorf("download failed: %v", err)
 	}
 	tmp.Close()
 
-	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
+	if err := os.Chmod(tmpName, 0o755); err != nil {
 		return err
 	}
 
 	// Verify it runs
-	cmd := exec.Command(tmp.Name(), "--version")
+	cmd := exec.Command(tmpName, "--version")
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("downloaded binary verification failed: %v", err)
 	}
 	newVer := strings.TrimSpace(string(out))
 
-	// Find current binary
-	binPath, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
-	// Replace via copy+delete (handles cross-device links)
-	src, err := os.Open(tmp.Name())
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	dst, err := os.Create(binPath)
-	if err != nil {
+	// Atomically replace current binary (same device -> rename works)
+	if err := os.Rename(tmpName, binPath); err != nil {
 		return fmt.Errorf("replace failed: %v", err)
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
-		return fmt.Errorf("replace failed: %v", err)
-	}
-	dst.Close()
-	src.Close()
-
-	if err := os.Chmod(binPath, 0o755); err != nil {
-		return err
 	}
 
 	fmt.Printf("\nUpdated to %s\n", newVer)
