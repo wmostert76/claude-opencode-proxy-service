@@ -10,19 +10,68 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Create commit release
+  build:
+    name: Build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
+          go-version: "1.23"
+
+      - name: Build
+        run: |
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags="-s -w" -o "claude-go-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
+            ./cmd/claude-go/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-go-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: claude-go-*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect binaries
+        run: |
+          mkdir -p dist
+          find artifacts -name 'claude-go-*' -exec cp {} dist/ \;
+          ls -lh dist/
 
       - name: Resolve version
         id: version
-        shell: bash
         run: |
           base="$(cat VERSION)"
           short_sha="${GITHUB_SHA::7}"
@@ -35,7 +84,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           BASE: ${{ steps.version.outputs.base }}
-        shell: bash
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists"
@@ -52,31 +100,29 @@ jobs:
           cat > release-notes.md <<NOTES
           ## Claude Go v${BASE}
 
-          Automated release for commit \`${GITHUB_SHA}\`.
-
           ### Install
 
+          **Linux / macOS:**
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/bootstrap.sh | bash
-          claude setup
+          claude-go install
+          claude-go --api <key>
+          \`\`\`
+
+          **Windows (PowerShell):**
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/bootstrap.ps1 | iex
+          claude-go install
+          claude-go --api <key>
           \`\`\`
 
           ### Changes
 
           ${changes}
-
-          ### Useful Commands
-
-          \`\`\`bash
-          claude doctor
-          claude status
-          claude logs
-          claude models --test
-          claude update
-          \`\`\`
           NOTES
 
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            dist/*

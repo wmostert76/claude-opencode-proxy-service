@@ -1,41 +1,41 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
-readonly REPO="${CLAUDE_GO_REPO:-wmostert76/claude-go}"
-readonly INSTALL_DIR="${CLAUDE_GO_HOME:-$HOME/.local/share/claude-go}"
-readonly ARCHIVE_URL="https://github.com/$REPO/archive/refs/heads/main.tar.gz"
+REPO="wmostert76/claude-go"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
 
-need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "Error: required command not found: $1" >&2
-    exit 1
-  }
-}
+case "$ARCH" in
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
 
-need_cmd curl
-need_cmd tar
-need_cmd node
-need_cmd npm
-need_cmd python3
+case "$OS" in
+  darwin|linux) ;;
+  *) echo "Unsupported OS: $OS"; exit 1 ;;
+esac
 
-tmpdir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmpdir"
-}
-trap cleanup EXIT
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
 
-echo "Downloading $REPO..."
-curl -fsSL "$ARCHIVE_URL" | tar -xz -C "$tmpdir" --strip-components=1
+URL="https://github.com/${REPO}/releases/latest/download/claude-go-${OS}-${ARCH}"
+echo "Downloading Claude Go for ${OS}/${ARCH}..."
+curl -fsSL "$URL" -o "$BIN_DIR/claude-go"
+chmod +x "$BIN_DIR/claude-go"
 
-rm -rf "$INSTALL_DIR"
-mkdir -p "$(dirname "$INSTALL_DIR")"
-mv "$tmpdir" "$INSTALL_DIR"
-trap - EXIT
-
-chmod +x "$INSTALL_DIR/bin/claude-opencode" "$INSTALL_DIR/scripts/install.sh" "$INSTALL_DIR/scripts/uninstall.sh"
-
-"$INSTALL_DIR/scripts/install.sh"
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  echo
+  echo "Note: $BIN_DIR is not on your PATH."
+  echo "Add this to your shell profile:"
+  echo
+  echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
 
 echo
-echo "Installed Claude Go in:"
-echo "  $INSTALL_DIR"
+echo "Claude Go installed to $BIN_DIR/claude-go"
+echo
+echo "Next steps:"
+echo "  claude-go install                # Install Claude Code locally"
+echo "  claude-go --api <key>            # Store your OpenCode Go API key"
+echo "  claude-go                        # Start!"
