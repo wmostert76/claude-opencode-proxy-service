@@ -461,9 +461,27 @@ func runUpdate() error {
 		return err
 	}
 
-	// Replace
-	if err := os.Rename(tmp.Name(), binPath); err != nil {
-		return fmt.Errorf("replace failed: %v — try: mv %s %s", err, tmp.Name(), binPath)
+	// Replace via copy+delete (handles cross-device links)
+	src, err := os.Open(tmp.Name())
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(binPath)
+	if err != nil {
+		return fmt.Errorf("replace failed: %v", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("replace failed: %v", err)
+	}
+	dst.Close()
+	src.Close()
+
+	if err := os.Chmod(binPath, 0o755); err != nil {
+		return err
 	}
 
 	fmt.Printf("\nUpdated to %s\n", newVer)
