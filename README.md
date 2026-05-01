@@ -15,19 +15,18 @@
 
 ## Why
 
-Claude Code is a strong terminal workflow. OpenCode Go gives access to a fast model pool such as DeepSeek, Kimi, GLM, MiniMax, Qwen and Mimo.
+**The problem:** Claude Code speaks Anthropic Messages format. OpenCode Go has 14 models, but only **2 speak Anthropic Messages natively** (MiniMax M2.5/M2.7). The other **12 speak OpenAI Chat Completions**, making them unusable with Claude Code without translation.
 
-This project keeps the command you already use:
+This proxy does exactly that — it translates Anthropic Messages ⟷ OpenAI Chat Completions in real time, so all 14 Go models work with Claude Code.
 
-```bash
-claude
 ```
-
-but transparently starts a local protocol adapter first:
-
-```text
 Claude Code  ──Anthropic Messages──▶  Proxy (:8082)  ──OpenAI Chat──▶  OpenCode Go
 ```
+
+| Without proxy | With proxy |
+|---|---|
+| 2/14 Go models usable via Claude Code | 14/14 Go models usable via Claude Code |
+| Only MiniMax M2.5, M2.7 | Adds DeepSeek, Kimi, GLM, Qwen, Mimo |
 
 All Claude Code native tools work: Bash, Read, Write, Edit, WebFetch, WebSearch, Task, NotebookEdit, Agent, and more.
 
