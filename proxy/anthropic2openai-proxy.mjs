@@ -49,6 +49,12 @@ const INTERNAL_WEB_FETCH_TOOL = {
   },
 };
 
+const PROXY_SYSTEM_NOTE = [
+  "Claude Code built-in tools are disabled in this environment.",
+  "If you need to inspect a public web page or URL, use the available web_fetch tool.",
+  "Use web_fetch only for http/https pages that are relevant to the user's request.",
+].join(" ");
+
 // ── Request translation: Anthropic → OpenAI ──────────────────────────
 
 function translateToolResultBlocks(content) {
@@ -177,8 +183,10 @@ function anthropicToOpenAI(body) {
         .join("\n");
     }
     if (systemContent) {
-      req.messages.push({ role: "system", content: systemContent });
+      req.messages.push({ role: "system", content: `${systemContent}\n\n${PROXY_SYSTEM_NOTE}` });
     }
+  } else {
+    req.messages.push({ role: "system", content: PROXY_SYSTEM_NOTE });
   }
 
   // Messages

@@ -43,6 +43,8 @@ DEFAULT_MODEL="${DEFAULT_MODEL:-}"
 PROXY_PID=""
 API_KEY=""
 STATUS_STARTED_PROXY=0
+SANITIZED_ARGS=()
+CUSTOM_SYSTEM_PROMPT=""
 
 version() {
   if [[ -r "$VERSION_FILE" ]]; then
@@ -76,6 +78,26 @@ warn() {
 
 fail() {
   printf '%s%s%s %s\n' "$(color 31)" "FAIL" "$(color 0)" "$*"
+}
+
+sanitize_claude_args() {
+  SANITIZED_ARGS=()
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --tools|--allowedTools|--allowed-tools|--disallowedTools|--disallowed-tools)
+        shift
+        [[ "$#" -gt 0 ]] && shift
+        ;;
+      --tools=*|--allowedTools=*|--allowed-tools=*|--disallowedTools=*|--disallowed-tools=*)
+        shift
+        ;;
+      *)
+        SANITIZED_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
 }
 
 port_pids() {
@@ -205,6 +227,59 @@ PY
   sync_claude_settings
   printf 'OpenCode Go API key stored in %s\n' "$CONFIG_FILE"
   printf 'Claude settings now point to local proxy in %s\n' "$CLAUDE_SETTINGS"
+}
+
+set_custom_system_prompt() {
+  local prompt="${1:-}"
+
+  [[ -n "$prompt" ]] || die "Usage: claude --prompt <text>"
+
+  CONFIG_PATH="$CONFIG_FILE" PROMPT_VALUE="$prompt" python3 <<'PY'
+import json
+import os
+
+config_path = os.environ["CONFIG_PATH"]
+prompt = os.environ["PROMPT_VALUE"]
+
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+cfg["systemPrompt"] = prompt
+os.makedirs(os.path.dirname(config_path), exist_ok=True)
+with open(config_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+
+  chmod 600 "$CONFIG_FILE"
+  printf 'Persistent system prompt stored in %s\n' "$CONFIG_FILE"
+}
+
+clear_custom_system_prompt() {
+  CONFIG_PATH="$CONFIG_FILE" python3 <<'PY'
+import json
+import os
+
+config_path = os.environ["CONFIG_PATH"]
+
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+cfg.pop("systemPrompt", None)
+os.makedirs(os.path.dirname(config_path), exist_ok=True)
+with open(config_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+
+  chmod 600 "$CONFIG_FILE"
+  printf 'Persistent system prompt removed from %s\n' "$CONFIG_FILE"
 }
 
 ensure_proxy_config() {
@@ -474,6 +549,22 @@ print(model or "deepseek-v4-pro")
 PY
 }
 
+read_custom_system_prompt() {
+  CONFIG_PATH="$CONFIG_FILE" python3 <<'PY'
+import json
+import os
+
+try:
+    with open(os.environ["CONFIG_PATH"], "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+prompt = cfg.get("systemPrompt") or ""
+print(prompt)
+PY
+}
+
 set_default_model() {
   local model
   model="$(normalize_go_model "$1")"
@@ -519,6 +610,7 @@ load_runtime_config() {
   API_KEY="$(read_api_key)" || die "Could not read API key from $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
   [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
   DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
+  CUSTOM_SYSTEM_PROMPT="$(read_custom_system_prompt)"
   ensure_proxy_config
   sync_claude_settings
 }
@@ -722,6 +814,16 @@ maybe_handle_model_command() {
     esac
   fi
 
+  if [[ "$#" -eq 2 && "${1:-}" == "--prompt" ]]; then
+    set_custom_system_prompt "$2"
+    return 0
+  fi
+
+  if [[ "$#" -eq 1 && "${1:-}" == "--prompt-clear" ]]; then
+    clear_custom_system_prompt
+    return 0
+  fi
+
   if [[ "$#" -eq 2 && "${1:-}" == "--api" ]]; then
     set_api_key "$2"
     return 0
@@ -787,7 +889,7 @@ BASH
     return 0
   fi
 
-  return 1
+  return 64
 }
 
 start_proxy() {
@@ -865,6 +967,7 @@ cleanup() {
 
 main() {
   local command_status
+  local -a claude_cmd
 
   set +e
   maybe_handle_model_command "$@"
@@ -886,10 +989,20 @@ main() {
   stop_existing_proxy
   trap cleanup EXIT INT TERM
   start_proxy
+  sanitize_claude_args "$@"
+  claude_cmd=(
+    "$REAL_CLAUDE"
+    --allow-dangerously-skip-permissions
+    --tools ""
+  )
+  if [[ -n "$CUSTOM_SYSTEM_PROMPT" ]]; then
+    claude_cmd+=(--append-system-prompt "$CUSTOM_SYSTEM_PROMPT")
+  fi
+  claude_cmd+=("${SANITIZED_ARGS[@]}")
 
   ANTHROPIC_BASE_URL="$PROXY_URL" \
     ANTHROPIC_API_KEY="claude-opencode-local-proxy" \
-    "$REAL_CLAUDE" --allow-dangerously-skip-permissions "$@"
+    "${claude_cmd[@]}"
 }
 
 main "$@"
