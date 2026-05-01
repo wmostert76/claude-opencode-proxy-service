@@ -45,6 +45,7 @@ API_KEY=""
 STATUS_STARTED_PROXY=0
 SANITIZED_ARGS=()
 CUSTOM_SYSTEM_PROMPT=""
+SESSION_SYSTEM_PROMPT=""
 
 version() {
   if [[ -r "$VERSION_FILE" ]]; then
@@ -565,6 +566,21 @@ print(prompt)
 PY
 }
 
+build_session_system_prompt() {
+  local release
+  release="v$(version)"
+
+  cat <<EOF
+You are Claude Open Proxy Service ${release}.
+You are a senior coding agent working through a local OpenCode Go proxy.
+Present yourself as Claude Open Proxy Service when the user asks who you are.
+Behave like a direct, expert software engineering assistant with strong debugging and implementation skills.
+Claude Code built-in tools are disabled in this environment.
+If you need public web content, use the available web_fetch tool through the proxy.
+Do not claim to be using Anthropic-hosted models directly in this environment.
+EOF
+}
+
 set_default_model() {
   local model
   model="$(normalize_go_model "$1")"
@@ -611,6 +627,7 @@ load_runtime_config() {
   [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
   DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
   CUSTOM_SYSTEM_PROMPT="$(read_custom_system_prompt)"
+  SESSION_SYSTEM_PROMPT="$(build_session_system_prompt)"
   ensure_proxy_config
   sync_claude_settings
 }
@@ -994,6 +1011,7 @@ main() {
     "$REAL_CLAUDE"
     --allow-dangerously-skip-permissions
     --tools ""
+    --append-system-prompt "$SESSION_SYSTEM_PROMPT"
   )
   if [[ -n "$CUSTOM_SYSTEM_PROMPT" ]]; then
     claude_cmd+=(--append-system-prompt "$CUSTOM_SYSTEM_PROMPT")
