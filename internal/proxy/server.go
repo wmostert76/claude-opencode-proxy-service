@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,11 +23,22 @@ type Server struct {
 }
 
 func NewServer(apiKey, defaultModel string, port int) *Server {
+	logPath := os.Getenv("CLAUDE_GO_LOG")
+	if logPath == "" {
+		home, _ := os.UserHomeDir()
+		logPath = filepath.Join(home, ".cache", "claude-go", "proxy.log")
+	}
+	os.MkdirAll(filepath.Dir(logPath), 0o700)
+	logFile, _ := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	var writer io.Writer = os.Stderr
+	if logFile != nil {
+		writer = io.MultiWriter(os.Stderr, logFile)
+	}
 	return &Server{
 		APIKey:       apiKey,
 		DefaultModel: defaultModel,
 		Port:         port,
-		logger:       log.Default(),
+		logger:       log.New(writer, "[claude-go] ", log.LstdFlags),
 	}
 }
 

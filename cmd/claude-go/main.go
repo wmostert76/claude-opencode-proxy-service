@@ -27,14 +27,29 @@ func main() {
 		return
 	}
 
-	args := os.Args[1:]
+	var args = os.Args[1:]
 
 	// Handle subcommands
-	switch args[0] {
-	case "--api", "--model", "-m", "--prompt", "--prompt-clear",
-		"--completion", "--complete-models", "--version", "--help",
-		"setup", "doctor", "status", "logs", "traces", "trace",
-		"update", "install", "uninstall", "models":
+	switch {
+	case len(args) > 0 && args[0] == "serve":
+		// Start proxy only (for testing direct API access)
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		proxy.ProxyInfo(version)
+		proxy.FetchModelsAtStartup(cfg.APIKey)
+		srv := proxy.NewServer(cfg.APIKey, cfg.Model, proxy.Port())
+		if err := srv.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Proxy error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Handle --api and other --flags before subcommand dispatch
+	if len(args) > 0 && args[0] == "--api" {
 		if err := cli.Run(args); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -42,7 +57,26 @@ func main() {
 		return
 	}
 
-	// Unknown args → forward to Claude Code
+	switch {
+	case len(args) > 0 && (args[0] == "--model" || args[0] == "-m"),
+		len(args) > 0 && args[0] == "--prompt",
+		len(args) > 0 && args[0] == "--prompt-clear",
+		len(args) > 0 && args[0] == "--completion",
+		len(args) > 0 && args[0] == "--complete-models",
+		len(args) > 0 && args[0] == "--version",
+		len(args) > 0 && args[0] == "--help",
+		len(args) > 0 && (args[0] == "setup" || args[0] == "doctor" || args[0] == "status" ||
+			args[0] == "logs" || args[0] == "traces" || args[0] == "trace" ||
+			args[0] == "update" || args[0] == "install" || args[0] == "uninstall" ||
+			args[0] == "models"):
+		if err := cli.Run(args); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Default: start proxy + Claude Code
 	runClaudeCode(args)
 }
 
