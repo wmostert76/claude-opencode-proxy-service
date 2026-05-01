@@ -41,6 +41,22 @@ scripts/uninstall.sh             Restore direct Claude Code symlink
 
 ## Install
 
+One-click install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-opencode-proxy-service/main/scripts/bootstrap.sh | bash
+```
+
+This downloads the repo to:
+
+```text
+~/.local/share/claude-opencode-proxy-service
+```
+
+It also installs Claude Code with npm if it is not already installed.
+
+Local install from a checkout:
+
 ```bash
 ./scripts/install.sh
 ```
