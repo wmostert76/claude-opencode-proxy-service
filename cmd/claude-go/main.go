@@ -16,7 +16,7 @@ import (
 	"github.com/wmostert76/claude-go/internal/trace"
 )
 
-var version = "0.1.0"
+var version = "1.0.0"
 
 func main() {
 	cli.SetVersion(version)

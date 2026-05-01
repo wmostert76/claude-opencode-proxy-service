@@ -43,8 +43,9 @@ jobs:
 
       - name: Build
         run: |
+          VERSION="$(cat VERSION)"
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -ldflags="-s -w" -o "claude-go-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
+            go build -ldflags="-s -w -X main.version=${VERSION}" -o "claude-go-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
             ./cmd/claude-go/
 
       - name: Upload artifact
