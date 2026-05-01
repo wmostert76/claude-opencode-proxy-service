@@ -15,6 +15,10 @@ const PORT = parseInt(process.env.PROXY_PORT || "8082", 10);
 const TARGET = "https://opencode.ai/zen/go/v1/chat/completions";
 const API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const DEFAULT_MODEL = normalizeModel(process.env.OPENCODE_GO_MODEL) || "deepseek-v4-pro";
+const WEB_FETCH_ENABLED = process.env.CLAUDE_OPENCODE_WEB_FETCH !== "0";
+const WEB_FETCH_TIMEOUT_MS = parseInt(process.env.CLAUDE_OPENCODE_WEB_FETCH_TIMEOUT_MS || "10000", 10);
+const WEB_FETCH_MAX_BYTES = parseInt(process.env.CLAUDE_OPENCODE_WEB_FETCH_MAX_BYTES || "120000", 10);
+const WEB_FETCH_MAX_ROUNDS = parseInt(process.env.CLAUDE_OPENCODE_WEB_FETCH_MAX_ROUNDS || "3", 10);
 
 if (!API_KEY) {
   console.error("ANTHROPIC_API_KEY env var is required");
@@ -25,6 +29,25 @@ function normalizeModel(model) {
   if (!model || typeof model !== "string") return "";
   return model.replace(/^opencode-go\//, "");
 }
+
+const INTERNAL_WEB_FETCH_TOOL = {
+  type: "function",
+  function: {
+    name: "web_fetch",
+    description: "Fetch a public http/https URL and return readable text. Use this when current web page content is needed.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "The full http or https URL to fetch.",
+        },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    },
+  },
+};
 
 // ── Request translation: Anthropic → OpenAI ──────────────────────────
 
@@ -165,8 +188,11 @@ function anthropicToOpenAI(body) {
   req.messages.push(...translateMessages(body.messages || []));
 
   // Tools
-  const tools = translateTools(body.tools);
-  if (tools && tools.length > 0) {
+  const tools = translateTools(body.tools) || [];
+  if (WEB_FETCH_ENABLED && !tools.some(tool => tool.function?.name === "web_fetch")) {
+    tools.push(INTERNAL_WEB_FETCH_TOOL);
+  }
+  if (tools.length > 0) {
     req.tools = tools;
     req.tool_choice = translateToolChoice(body.tool_choice) || "auto";
   }
@@ -354,6 +380,176 @@ async function forwardRequest(openaiReq) {
   return resp;
 }
 
+function isInternalToolCall(toolCall) {
+  return toolCall?.function?.name === "web_fetch";
+}
+
+function compactFetchedText(text, contentType) {
+  let out = text;
+  if (contentType.includes("text/html")) {
+    out = out
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+  return out.replace(/\s+/g, " ").trim().slice(0, WEB_FETCH_MAX_BYTES);
+}
+
+async function readLimitedText(resp) {
+  const reader = resp.body?.getReader();
+  if (!reader) return "";
+
+  const chunks = [];
+  let total = 0;
+  while (total < WEB_FETCH_MAX_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+    if (total >= WEB_FETCH_MAX_BYTES) break;
+  }
+  await reader.cancel().catch(() => {});
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function executeWebFetch(args) {
+  let url;
+  try {
+    url = new URL(args?.url || "");
+  } catch {
+    return JSON.stringify({ ok: false, error: "Invalid URL" });
+  }
+
+  if (!["http:", "https:"].includes(url.protocol)) {
+    return JSON.stringify({ ok: false, error: "Only http and https URLs are supported" });
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "claude-opencode-proxy-service/0.3 web_fetch",
+        Accept: "text/html,text/plain,application/json,*/*;q=0.5",
+      },
+    });
+    const contentType = resp.headers.get("content-type") || "";
+    const raw = await readLimitedText(resp);
+    return JSON.stringify({
+      ok: resp.ok,
+      url: resp.url,
+      status: resp.status,
+      contentType,
+      truncated: raw.length >= WEB_FETCH_MAX_BYTES,
+      text: compactFetchedText(raw, contentType),
+    });
+  } catch (err) {
+    return JSON.stringify({ ok: false, url: url.toString(), error: err.message });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveInternalToolCalls(openaiReq) {
+  const req = { ...openaiReq, stream: false, messages: [...openaiReq.messages] };
+
+  for (let round = 0; round < WEB_FETCH_MAX_ROUNDS; round++) {
+    const upstreamResp = await forwardRequest(req);
+    if (!upstreamResp.ok) return { upstreamResp };
+
+    const data = await upstreamResp.json();
+    const message = data.choices?.[0]?.message;
+    const toolCalls = message?.tool_calls || [];
+    const internalCalls = toolCalls.filter(isInternalToolCall);
+
+    if (internalCalls.length === 0 || internalCalls.length !== toolCalls.length) {
+      return { data };
+    }
+
+    req.messages.push({
+      role: "assistant",
+      content: message.content || null,
+      tool_calls: toolCalls,
+    });
+
+    for (const call of internalCalls) {
+      let args = {};
+      try {
+        args = JSON.parse(call.function?.arguments || "{}");
+      } catch {
+        args = {};
+      }
+      console.error(`[proxy] web_fetch ${args.url || ""}`.trim());
+      req.messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: await executeWebFetch(args),
+      });
+    }
+  }
+
+  return {
+    data: {
+      id: "chatcmpl_web_fetch_limit",
+      model: req.model,
+      choices: [{
+        finish_reason: "stop",
+        message: {
+          role: "assistant",
+          content: "web_fetch reached the maximum internal fetch rounds before a final answer was produced.",
+        },
+      }],
+      usage: {},
+    },
+  };
+}
+
+function writeAnthropicSSE(res, anthropicResp) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  res.write(`event: message_start\ndata: ${JSON.stringify({
+    type: "message_start",
+    message: { ...anthropicResp, content: [], stop_reason: null, stop_sequence: null },
+  })}\n\n`);
+
+  for (let i = 0; i < anthropicResp.content.length; i++) {
+    const block = anthropicResp.content[i];
+    res.write(`event: content_block_start\ndata: ${JSON.stringify({
+      type: "content_block_start",
+      index: i,
+      content_block: block.type === "text" ? { type: "text", text: "" } : block,
+    })}\n\n`);
+    if (block.type === "text" && block.text) {
+      res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+        type: "content_block_delta",
+        index: i,
+        delta: { type: "text_delta", text: block.text },
+      })}\n\n`);
+    }
+    res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
+  }
+
+  res.write(`event: message_delta\ndata: ${JSON.stringify({
+    type: "message_delta",
+    delta: { stop_reason: anthropicResp.stop_reason || "end_turn", stop_sequence: null },
+    usage: anthropicResp.usage || { output_tokens: 0 },
+  })}\n\n`);
+  res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
+  res.end();
+}
+
 // ── Server ────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -370,7 +566,7 @@ const server = http.createServer(async (req, res) => {
   // Health check
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", target: TARGET, model: DEFAULT_MODEL }));
+    res.end(JSON.stringify({ status: "ok", target: TARGET, model: DEFAULT_MODEL, webFetch: WEB_FETCH_ENABLED }));
     return;
   }
 
@@ -431,9 +627,12 @@ const server = http.createServer(async (req, res) => {
   const openaiReq = anthropicToOpenAI(anthropicReq);
 
   try {
-    const upstreamResp = await forwardRequest(openaiReq);
+    const resolved = WEB_FETCH_ENABLED
+      ? await resolveInternalToolCalls(openaiReq)
+      : { upstreamResp: await forwardRequest(openaiReq) };
+    const upstreamResp = resolved.upstreamResp;
 
-    if (!upstreamResp.ok) {
+    if (upstreamResp && !upstreamResp.ok) {
       const errText = await upstreamResp.text();
       console.error(`[proxy] upstream error ${upstreamResp.status}: ${errText.slice(0, 500)}`);
       res.writeHead(upstreamResp.status, { "Content-Type": "application/json" });
@@ -447,7 +646,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (openaiReq.stream) {
+    if (resolved.data) {
+      const anthropicResp = openAIToAnthropic(resolved.data);
+      if (anthropicReq.stream) {
+        writeAnthropicSSE(res, anthropicResp);
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(anthropicResp));
+      }
+    } else if (openaiReq.stream) {
       // Streaming response
       res.writeHead(200, {
         "Content-Type": "text/event-stream",

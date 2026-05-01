@@ -40,16 +40,41 @@ jobs:
             exit 0
           fi
 
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "$TAG" \
-            --notes "Automated release for commit \`$GITHUB_SHA\`.
+          previous="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')"
+          if [[ -n "$previous" ]]; then
+            changes="$(git log --pretty='- %s (%h)' "${previous}..${GITHUB_SHA}")"
+          else
+            changes="$(git log --pretty='- %s (%h)' -n 20)"
+          fi
 
-          Base version: \`$BASE\`
-          Commit: \`$GITHUB_SHA\`
+          cat > release-notes.md <<NOTES
+          ## Claude OpenCode Proxy Service v${BASE}
 
-          Install:
+          Automated release for commit \`${GITHUB_SHA}\`.
+
+          ### Install
 
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/bootstrap.sh | bash
-          \`\`\`"
+          claude setup
+          \`\`\`
+
+          ### Changes
+
+          ${changes}
+
+          ### Useful Commands
+
+          \`\`\`bash
+          claude doctor
+          claude status
+          claude logs
+          claude models --test
+          claude update
+          \`\`\`
+          NOTES
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file release-notes.md

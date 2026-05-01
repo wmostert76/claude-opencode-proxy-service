@@ -6,12 +6,31 @@ readonly BIN_DIR="${NPM_GLOBAL_BIN:-$HOME/.local/share/npm-global/bin}"
 readonly WRAPPER="$BIN_DIR/claude"
 readonly TARGET="$ROOT_DIR/bin/claude-opencode"
 readonly REAL_CLAUDE="$HOME/.local/share/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+readonly VERSION_FILE="$ROOT_DIR/VERSION"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "Error: required command not found: $1" >&2
     exit 1
   }
+}
+
+version() {
+  if [[ -r "$VERSION_FILE" ]]; then
+    tr -d '[:space:]' < "$VERSION_FILE"
+  else
+    printf 'dev'
+  fi
+}
+
+print_header() {
+  echo "Claude OpenCode Proxy Service"
+  echo "─────────────────────────────"
+  printf '  %-10s v%s\n' "Release" "$(version)"
+  printf '  %-10s %s\n' "Install" "$ROOT_DIR"
+  printf '  %-10s %s\n' "Wrapper" "$WRAPPER"
+  echo "─────────────────────────────"
+  echo
 }
 
 ensure_npm_prefix() {
@@ -35,6 +54,8 @@ ensure_claude_code() {
     exit 1
   }
 }
+
+print_header
 
 need_cmd node
 need_cmd npm

@@ -37,6 +37,7 @@ No Anthropic model routing is used. The proxy is always in the path.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-opencode-proxy-service/main/scripts/bootstrap.sh | bash
+claude setup
 ```
 
 The installer:
@@ -48,7 +49,13 @@ The installer:
 - points Claude Code at the local proxy through `~/.claude/settings.json`
 - does not commit, print, or upload secrets
 
-Store your OpenCode Go API key once:
+Use the setup wizard once:
+
+```bash
+claude setup
+```
+
+Or store your OpenCode Go API key directly:
 
 ```bash
 claude --api sk-your-opencode-go-key
@@ -63,11 +70,12 @@ Every normal `claude` launch starts the proxy and shows a compact status panel:
 ```text
 Claude OpenCode Proxy Service
 ─────────────────────────────
-  Release    v0.2.0
+  Release    v0.3.0
   State      ready
   Proxy      http://127.0.0.1:8082
   Provider   OpenCode Go
   Model      opencode-go/deepseek-v4-pro
+  Tools      proxy web_fetch
   Config     /home/you/.config/claude-opencode-proxy/config.json
   Log        /home/you/.cache/claude-opencode-proxy/proxy.log
   Mode       Claude Code passthrough + local adapter
@@ -86,6 +94,18 @@ Use Claude Code as usual:
 claude
 claude -p "Reply exactly: pong"
 claude --version
+```
+
+Management commands:
+
+```bash
+claude setup
+claude doctor
+claude status
+claude logs
+claude logs --follow
+claude update
+claude models --test
 ```
 
 Model management is handled by this wrapper:
@@ -127,6 +147,14 @@ Completion source:
 ```bash
 claude --complete-models
 ```
+
+Full model test:
+
+```bash
+claude models --test
+```
+
+This starts the local proxy once and sends a small `pong` request to every OpenCode Go model.
 
 ---
 
@@ -225,6 +253,46 @@ VERSION                          base release version
 
 ---
 
+## CLI Commands
+
+| Command | Purpose |
+| --- | --- |
+| `claude setup` | Interactive API key and default model setup |
+| `claude doctor` | Checks dependencies, config, key, model and proxy state |
+| `claude status` | Shows release, model, proxy, config, log and running PIDs |
+| `claude logs` | Shows the latest proxy logs |
+| `claude logs --follow` | Follows proxy logs live |
+| `claude update` | Re-runs the GitHub one-line installer in-place |
+| `claude models --test` | Tests every OpenCode Go model with a small pong request |
+| `claude --model` | Shows the ranked OpenCode Go model table |
+| `claude --model <model>` | Stores the default OpenCode Go model |
+| `claude --api <key>` | Stores the OpenCode Go API key |
+
+---
+
+## Proxy Web Fetch
+
+The proxy includes an internal `web_fetch` tool for models that do not reliably use Claude Code tools through the compatibility layer.
+
+When a model asks to fetch a URL, the proxy:
+
+- accepts only `http` and `https`
+- fetches the page locally from the proxy process
+- strips HTML into compact readable text
+- sends the result back to the model
+- returns only the final answer to Claude Code
+
+Useful limits:
+
+```bash
+CLAUDE_OPENCODE_WEB_FETCH=0                 # disable
+CLAUDE_OPENCODE_WEB_FETCH_TIMEOUT_MS=10000  # timeout
+CLAUDE_OPENCODE_WEB_FETCH_MAX_BYTES=120000  # max page text
+CLAUDE_OPENCODE_WEB_FETCH_MAX_ROUNDS=3      # max internal tool rounds
+```
+
+---
+
 ## Releases
 
 Every push to `main` creates a GitHub release.
@@ -258,6 +326,8 @@ Check the wrapper:
 ```bash
 type -a claude
 claude --version
+claude doctor
+claude status
 ```
 
 Check models:
@@ -271,6 +341,8 @@ claude --complete-models
 Check proxy logs:
 
 ```bash
+claude logs
+claude logs --follow
 tail -f ~/.cache/claude-opencode-proxy/proxy.log
 ```
 

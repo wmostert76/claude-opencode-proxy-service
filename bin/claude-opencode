@@ -42,6 +42,7 @@ DEFAULT_MODEL="${DEFAULT_MODEL:-}"
 
 PROXY_PID=""
 API_KEY=""
+STATUS_STARTED_PROXY=0
 
 version() {
   if [[ -r "$VERSION_FILE" ]]; then
@@ -58,6 +59,23 @@ die() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+color() {
+  [[ "${NO_COLOR:-}" ]] && return 0
+  printf '\033[%sm' "$1"
+}
+
+ok() {
+  printf '%s%s%s %s\n' "$(color 32)" "OK" "$(color 0)" "$*"
+}
+
+warn() {
+  printf '%s%s%s %s\n' "$(color 33)" "WARN" "$(color 0)" "$*"
+}
+
+fail() {
+  printf '%s%s%s %s\n' "$(color 31)" "FAIL" "$(color 0)" "$*"
 }
 
 port_pids() {
@@ -497,7 +515,213 @@ PY
   printf 'Default OpenCode Go model set to: opencode-go/%s\n' "$model"
 }
 
+load_runtime_config() {
+  API_KEY="$(read_api_key)" || die "Could not read API key from $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
+  [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
+  DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
+  ensure_proxy_config
+  sync_claude_settings
+}
+
+print_status() {
+  local health="down"
+  local pids=""
+
+  pids="$(port_pids | tr '\n' ' ')"
+  if curl -fsS "$PROXY_URL/health" >/dev/null 2>&1; then
+    health="ready"
+  fi
+
+  DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
+  print_startup_table "$health"
+  printf '  %-12s %s\n' "Claude bin" "$REAL_CLAUDE"
+  printf '  %-12s %s\n' "Port PIDs" "${pids:-none}"
+}
+
+show_logs() {
+  local mode="${1:-}"
+
+  mkdir -p "$(dirname "$LOG_FILE")"
+  touch "$LOG_FILE"
+
+  if [[ "$mode" == "--follow" || "$mode" == "-f" ]]; then
+    tail -f "$LOG_FILE"
+  else
+    tail -n "${CLAUDE_OPENCODE_LOG_LINES:-80}" "$LOG_FILE"
+  fi
+}
+
+run_doctor() {
+  local failed=0
+
+  printf 'Claude OpenCode doctor v%s\n\n' "$(version)"
+
+  for cmd in node npm python3 curl tar; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      ok "$cmd found: $(command -v "$cmd")"
+    else
+      fail "$cmd missing"
+      failed=1
+    fi
+  done
+
+  if [[ -x "$REAL_CLAUDE" ]]; then
+    ok "Claude Code binary found"
+  else
+    fail "Claude Code binary missing: $REAL_CLAUDE"
+    failed=1
+  fi
+
+  if [[ -r "$CONFIG_FILE" ]]; then
+    ok "Proxy config readable: $CONFIG_FILE"
+  else
+    fail "Proxy config missing. Run: claude --api <opencode-go-api-key>"
+    failed=1
+  fi
+
+  if API_KEY="$(read_api_key)" && [[ -n "$API_KEY" ]]; then
+    ok "OpenCode Go API key configured"
+  else
+    fail "OpenCode Go API key missing. Run: claude --api <opencode-go-api-key>"
+    failed=1
+  fi
+
+  DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
+  if model_exists "$DEFAULT_MODEL"; then
+    ok "Default model exists: opencode-go/$DEFAULT_MODEL"
+  else
+    warn "Default model not found in local model list: opencode-go/$DEFAULT_MODEL"
+  fi
+
+  if curl -fsS "$PROXY_URL/health" >/dev/null 2>&1; then
+    ok "Proxy already reachable: $PROXY_URL"
+  else
+    warn "Proxy not currently running; normal claude launches start it automatically"
+  fi
+
+  if [[ "$failed" -eq 0 ]]; then
+    printf '\nDoctor result: ready\n'
+  else
+    printf '\nDoctor result: action needed\n'
+  fi
+
+  return "$failed"
+}
+
+run_setup() {
+  local key=""
+  local model=""
+
+  printf 'Claude OpenCode setup v%s\n\n' "$(version)"
+  printf 'OpenCode Go API key: '
+  read -r key
+  set_api_key "$key"
+
+  printf '\n'
+  list_go_models || true
+  printf '\nDefault model [deepseek-v4-pro]: '
+  read -r model
+  model="${model:-deepseek-v4-pro}"
+  set_default_model "$model"
+
+  printf '\n'
+  run_doctor
+}
+
+run_update() {
+  local install_dir
+  install_dir="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+  need_cmd curl
+  need_cmd tar
+
+  printf 'Updating Claude OpenCode Proxy Service in %s\n' "$install_dir"
+  CLAUDE_OPENCODE_HOME="$install_dir" \
+    bash -c 'curl -fsSL https://raw.githubusercontent.com/wmostert76/claude-opencode-proxy-service/main/scripts/bootstrap.sh | bash'
+}
+
+test_one_model() {
+  local model="$1"
+  local start_ms end_ms latency result status
+
+  start_ms="$(date +%s%3N)"
+  result="$(
+    curl -fsS -m "${CLAUDE_OPENCODE_TEST_TIMEOUT:-45}" \
+      -H 'Content-Type: application/json' \
+      -H 'x-api-key: claude-opencode-local-proxy' \
+      -d "{\"model\":\"$model\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"Reply exactly: pong\"}]}" \
+      "$PROXY_URL/v1/messages" 2>&1
+  )"
+  status=$?
+  end_ms="$(date +%s%3N)"
+  latency=$((end_ms - start_ms))
+
+  if [[ "$status" -eq 0 ]] && printf '%s' "$result" | grep -qi 'pong'; then
+    printf 'OK    %-28s %6sms  pong\n' "opencode-go/$model" "$latency"
+    return 0
+  fi
+
+  printf 'FAIL  %-28s %6sms  %s\n' "opencode-go/$model" "$latency" "$(printf '%s' "$result" | tr '\n' ' ' | cut -c1-120)"
+  return 1
+}
+
+test_models() {
+  local failed=0
+  local count=0
+  local model
+
+  load_runtime_config
+  stop_existing_proxy
+  trap cleanup EXIT INT TERM
+  CLAUDE_OPENCODE_QUIET=1 start_proxy
+
+  printf 'Testing OpenCode Go models through %s\n\n' "$PROXY_URL"
+  while IFS= read -r model; do
+    [[ -z "$model" ]] && continue
+    count=$((count + 1))
+    if ! test_one_model "$model"; then
+      failed=$((failed + 1))
+    fi
+  done < <(list_go_model_ids)
+
+  printf '\nResult: %s tested, %s failed\n' "$count" "$failed"
+  return "$failed"
+}
+
 maybe_handle_model_command() {
+  if [[ "$#" -ge 1 ]]; then
+    case "${1:-}" in
+      setup)
+        run_setup
+        return 0
+        ;;
+      doctor)
+        run_doctor
+        return 0
+        ;;
+      status)
+        print_status
+        return 0
+        ;;
+      logs)
+        show_logs "${2:-}"
+        return 0
+        ;;
+      update)
+        run_update
+        return 0
+        ;;
+      models)
+        if [[ "${2:-}" == "--test" ]]; then
+          test_models
+          return 0
+        fi
+        list_go_models
+        return 0
+        ;;
+    esac
+  fi
+
   if [[ "$#" -eq 2 && "${1:-}" == "--api" ]]; then
     set_api_key "$2"
     return 0
@@ -522,6 +746,7 @@ end
 
 complete -c claude -l model -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
 complete -c claude -s m -x -a '(__claude_opencode_go_models)' -d 'Set default OpenCode Go model'
+complete -c claude -f -a 'setup doctor status logs update models' -d 'Claude OpenCode command'
 FISH
         ;;
       bash)
@@ -538,7 +763,7 @@ _claude_opencode_completion() {
   fi
 
   if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "--api --model --help --version" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--api --model --help --version setup doctor status logs update models" -- "$cur") )
   fi
 }
 
@@ -620,6 +845,7 @@ print_startup_table() {
   printf '  %-10s %s\n' "Proxy" "${c}${PROXY_URL}${r}"
   printf '  %-10s %s\n' "Provider" "OpenCode Go"
   printf '  %-10s %s\n' "Model" "opencode-go/${DEFAULT_MODEL}"
+  printf '  %-10s %s\n' "Tools" "proxy web_fetch"
   printf '  %-10s %s\n' "Config" "$CONFIG_FILE"
   printf '  %-10s %s\n' "Log" "$LOG_FILE"
   printf '  %-10s %s\n' "Mode" "Claude Code passthrough + local adapter"
@@ -649,11 +875,7 @@ main() {
   [[ -f "$PROXY_SCRIPT" ]] || die "Proxy script not found: $PROXY_SCRIPT"
   [[ -x "$REAL_CLAUDE" ]] || die "Claude binary not found or not executable: $REAL_CLAUDE"
 
-  API_KEY="$(read_api_key)" || die "Could not read API key from $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
-  [[ -n "$API_KEY" ]] || die "API key is empty in $CONFIG_FILE. Run: claude --api <opencode-go-api-key>"
-  DEFAULT_MODEL="$(normalize_go_model "$(read_default_model)")"
-  ensure_proxy_config
-  sync_claude_settings
+  load_runtime_config
 
   stop_existing_proxy
   trap cleanup EXIT INT TERM
