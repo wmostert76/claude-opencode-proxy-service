@@ -125,13 +125,30 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-switch to vision model for image requests
+	switched := false
+	if HasImageContent(areq) {
+		if !visionModels[areq.Model] && !visionModels[s.DefaultModel] {
+			areq.Model = VisionModel
+			switched = true
+		}
+	}
+
 	oreq := AnthropicToOpenAI(areq, s.DefaultModel)
 	tr := &trace.Trace{
 		ID:     r.Header.Get("x-claude-opencode-trace-id"),
 		TS:     time.Now().Format(time.RFC3339),
-		Model:  oreq.Model,
+		Model:  s.DefaultModel,
 		Status: "started",
 		Stream: oreq.Stream,
+	}
+	if switched {
+		tr.FinalModel = areq.Model
+		tr.Failovers = append(tr.Failovers, trace.Failover{
+			From: s.DefaultModel,
+			To:   areq.Model,
+			At:   time.Now().Format(time.RFC3339),
+		})
 	}
 	if tr.ID == "" {
 		tr.ID = trace.NewID()

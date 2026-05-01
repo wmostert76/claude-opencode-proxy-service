@@ -123,8 +123,14 @@ type OpenAIRequest struct {
 }
 
 type contentExtract struct {
-	text     string
+	text      string
 	toolCalls []toolCallData
+	images    []imageData
+}
+
+type imageData struct {
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type toolCallData struct {
@@ -147,6 +153,7 @@ func resolveContent(v any) contentExtract {
 func resolveArrayContent(arr []any) contentExtract {
 	var texts []string
 	var tcs []toolCallData
+	var imgs []imageData
 	for _, block := range arr {
 		b, ok := block.(map[string]any)
 		if !ok {
@@ -171,11 +178,23 @@ func resolveArrayContent(arr []any) contentExtract {
 			tcs = append(tcs, tc)
 		case "tool_result":
 			// handled separately
+		case "image":
+			if src, ok := b["source"].(map[string]any); ok {
+				mediaType, _ := src["media_type"].(string)
+				data, _ := src["data"].(string)
+				if data != "" {
+					imgs = append(imgs, imageData{
+						MediaType: mediaType,
+						Data:      data,
+					})
+				}
+			}
 		}
 	}
 	return contentExtract{
 		text:      strings.Join(texts, "\n"),
 		toolCalls: tcs,
+		images:    imgs,
 	}
 }
 
@@ -223,6 +242,34 @@ func TranslateMessages(anthropicMsgs []AnthropicMessage) []OpenAIMessage {
 
 		ce := resolveContent(msg.Content)
 
+		// Build content — if images present, use array format
+		var content any
+		if len(ce.images) > 0 && msg.Role == "user" {
+			var parts []map[string]any
+			if ce.text != "" {
+				parts = append(parts, map[string]any{"type": "text", "text": ce.text})
+			}
+			for _, img := range ce.images {
+				mediaType := img.MediaType
+				if mediaType == "" {
+					mediaType = "image/png"
+				}
+				parts = append(parts, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": "data:" + mediaType + ";base64," + img.Data,
+					},
+				})
+			}
+			if len(parts) == 1 && parts[0]["type"] == "text" {
+				content = parts[0]["text"]
+			} else {
+				content = parts
+			}
+		} else if ce.text != "" {
+			content = ce.text
+		}
+
 		if len(ce.toolCalls) > 0 && msg.Role == "assistant" {
 			var tcs []OpenAIToolCall
 			for _, tc := range ce.toolCalls {
@@ -239,19 +286,18 @@ func TranslateMessages(anthropicMsgs []AnthropicMessage) []OpenAIMessage {
 					},
 				})
 			}
-			content := any(nil)
-			if ce.text != "" {
-				content = ce.text
+			c := any(nil)
+			if content != nil {
+				c = content
 			}
 			openaiMsgs = append(openaiMsgs, OpenAIMessage{
 				Role:      "assistant",
-				Content:   content,
+				Content:   c,
 				ToolCalls: tcs,
 			})
 		} else {
-			content := ""
-			if ce.text != "" {
-				content = ce.text
+			if content == nil {
+				content = ""
 			}
 			openaiMsgs = append(openaiMsgs, OpenAIMessage{
 				Role:    msg.Role,
@@ -312,6 +358,35 @@ func TranslateToolChoice(tc any) any {
 	default:
 		return "auto"
 	}
+}
+
+func HasImageContent(areq AnthropicRequest) bool {
+	for _, msg := range areq.Messages {
+		ce := resolveContent(msg.Content)
+		if len(ce.images) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+var VisionModel = "kimi-k2.6"
+
+var visionModels = map[string]bool{
+	"kimi-k2.6": true,
+	"kimi-k2.5": true,
+	"glm-5.1":   true,
+	"glm-5":     true,
+}
+
+func NeedsVisionModel(areq AnthropicRequest, currentModel string) (string, bool) {
+	if !HasImageContent(areq) {
+		return currentModel, false
+	}
+	if visionModels[currentModel] {
+		return currentModel, false
+	}
+	return VisionModel, true
 }
 
 func AnthropicToOpenAI(areq AnthropicRequest, defaultModel string) OpenAIRequest {
