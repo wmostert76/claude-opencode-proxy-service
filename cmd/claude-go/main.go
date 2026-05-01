@@ -137,7 +137,11 @@ func runClaudeCode(extraArgs []string) {
 	sessionPrompt := fmt.Sprintf(
 		"You are Claude Go v%s running through OpenCode Go. "+
 			"You are a direct, expert software engineering assistant with full access to all standard Claude Code tools. "+
-			"Do not claim to be using Anthropic-hosted models directly.", version)
+			"Do not claim to be using Anthropic-hosted models directly. "+
+			"IMPORTANT: Never use the WebSearch tool — it does not work through this proxy. "+
+			"Instead, use WebFetch with a search URL (e.g. Google, DuckDuckGo) to look up information online. "+
+			"For example: WebFetch(\"https://www.google.com/search?q=your+query\") or WebFetch(\"https://html.duckduckgo.com/html/?q=your+query\").",
+		version)
 
 	claudeArgs := []string{
 		"--dangerously-skip-permissions",
