@@ -25,11 +25,29 @@ curl -fsSL "$URL" -o "$BIN_DIR/claude-go"
 chmod +x "$BIN_DIR/claude-go"
 
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-  echo
-  echo "Note: $BIN_DIR is not on your PATH."
-  echo "Add this to your shell profile:"
-  echo
-  echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+  SHELL_NAME="$(basename "$SHELL")"
+  RC_FILE=""
+  case "$SHELL_NAME" in
+    zsh)  RC_FILE="$HOME/.zshrc" ;;
+    bash) RC_FILE="$HOME/.bashrc" ;;
+    fish) RC_FILE="$HOME/.config/fish/config.fish" ;;
+  esac
+
+  if [[ -n "$RC_FILE" ]]; then
+    mkdir -p "$(dirname "$RC_FILE")"
+    if ! grep -q '$HOME/.local/bin' "$RC_FILE" 2>/dev/null; then
+      echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$RC_FILE"
+      echo
+      echo "Added ~/.local/bin to PATH in $RC_FILE"
+      echo "Restart your terminal or run:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+  else
+    echo
+    echo "Note: $BIN_DIR is not on your PATH."
+    echo "Add this to your shell profile:"
+    echo
+    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+  fi
 fi
 
 echo

@@ -38,7 +38,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		proxy.ProxyInfo(version)
+		proxy.ProxyInfo(version, cfg.Model)
 		proxy.FetchModelsAtStartup(cfg.APIKey)
 		srv := proxy.NewServer(cfg.APIKey, cfg.Model, proxy.Port())
 		if err := srv.Start(); err != nil {
@@ -101,7 +101,7 @@ func runClaudeCode(extraArgs []string) {
 	srv := proxy.NewServer(cfg.APIKey, cfg.Model, proxy.Port())
 	stopCh := make(chan error, 1)
 	go func() {
-		proxy.ProxyInfo(version)
+		proxy.ProxyInfo(version, cfg.Model)
 		proxy.FetchModelsAtStartup(cfg.APIKey)
 		stopCh <- srv.Start()
 	}()

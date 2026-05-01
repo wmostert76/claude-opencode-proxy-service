@@ -310,13 +310,13 @@ func DefaultModel() string {
 }
 
 // ProxyInfo prints startup banner
-func ProxyInfo(version string) {
+func ProxyInfo(version, model string) {
 	fmt.Printf("Claude Go\n")
 	fmt.Printf("─────────────────────────────\n")
 	fmt.Printf("  Release    v%s\n", version)
 	fmt.Printf("  Proxy      http://127.0.0.1:%d\n", Port())
 	fmt.Printf("  Provider   OpenCode Go\n")
-	fmt.Printf("  Model      auto (via /v1/models discovery)\n")
+	fmt.Printf("  Model      %s\n", model)
 	fmt.Printf("  Tools      all Claude Code native tools\n")
 	fmt.Printf("─────────────────────────────\n\n")
 }

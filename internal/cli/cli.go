@@ -73,7 +73,7 @@ func runWrapper() error {
 func runWrapperArgs(extra []string) error {
 	cfg, _ := config.Load()
 	run := func() error {
-		proxy.ProxyInfo(version)
+		proxy.ProxyInfo(version, cfg.Model)
 		proxy.FetchModelsAtStartup(cfg.APIKey)
 		return proxy.NewServer(cfg.APIKey, cfg.Model, proxy.Port()).Start()
 	}

@@ -414,6 +414,11 @@ func AnthropicToOpenAI(areq AnthropicRequest, defaultModel string) OpenAIRequest
 		req.ToolChoice = "auto"
 	}
 
+	// Qwen models don't support tool_choice:required in thinking mode
+	if strings.HasPrefix(model, "qwen") && req.ToolChoice == "required" {
+		req.ToolChoice = "auto"
+	}
+
 	if areq.Temperature != nil {
 		req.Temperature = *areq.Temperature
 	}
