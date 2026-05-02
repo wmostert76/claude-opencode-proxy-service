@@ -18,6 +18,15 @@ import (
 
 var version = "2.0.0"
 
+var allGoModels = []string{
+	"deepseek-v4-pro", "deepseek-v4-flash",
+	"glm-5.1", "glm-5",
+	"kimi-k2.6", "kimi-k2.5",
+	"minimax-m2.7", "minimax-m2.5",
+	"qwen3.6-plus", "qwen3.5-plus",
+	"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni",
+}
+
 func SetVersion(v string) { version = v }
 
 func Run(args []string) error {
@@ -629,33 +638,29 @@ func pingModel(apiKey, model string) (bool, string) {
 }
 
 func listModelIDs() error {
+	modelSet := make(map[string]bool)
+	for _, m := range allGoModels {
+		modelSet[m] = true
+	}
+
+	// Supplement with models from opencode config if available
 	home, _ := os.UserHomeDir()
 	cfgPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	f, err := os.Open(cfgPath)
-	if err != nil {
-		// Fall back to known models
-		models := []string{
-			"deepseek-v4-pro", "deepseek-v4-flash",
-			"glm-5.1", "glm-5",
-			"kimi-k2.6", "kimi-k2.5",
-			"minimax-m2.7", "minimax-m2.5",
-			"qwen3.6-plus", "qwen3.5-plus",
-			"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni",
+	if err == nil {
+		defer f.Close()
+		var cfg map[string]any
+		json.NewDecoder(f).Decode(&cfg)
+		provider, _ := cfg["provider"].(map[string]any)
+		oc, _ := provider["opencode-go"].(map[string]any)
+		models, _ := oc["models"].(map[string]any)
+		for id := range models {
+			modelSet[id] = true
 		}
-		for _, m := range models {
-			fmt.Println(m)
-		}
-		return nil
 	}
-	defer f.Close()
 
-	var cfg map[string]any
-	json.NewDecoder(f).Decode(&cfg)
-	provider, _ := cfg["provider"].(map[string]any)
-	oc, _ := provider["opencode-go"].(map[string]any)
-	models, _ := oc["models"].(map[string]any)
-	for id := range models {
-		fmt.Println(id)
+	for m := range modelSet {
+		fmt.Println(m)
 	}
 	return nil
 }
